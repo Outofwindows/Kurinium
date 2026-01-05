@@ -50,6 +50,9 @@ pub fn install_to_path() -> anyhow::Result<()> {
 
     log_debug!("Starting installed exe...");
 
+    let start_cmd = format!("start \"\" \"{}\"", target_path.to_string_lossy());
+    log_debug!("[CMD] Executing: cmd /c {}", start_cmd);
+    
     Command::new("cmd")
         .args(["/c", "start", "", &target_path.to_string_lossy()])
         .creation_flags(CREATE_NO_WINDOW)
@@ -69,6 +72,8 @@ pub fn install_to_path() -> anyhow::Result<()> {
             (delay_ms / 1000).max(1) + 1,
             current_exe_path
         );
+        
+        log_debug!("[CMD] Executing autodelete: cmd /c {}", delete_cmd);
         
         Command::new("cmd")
             .args(["/c", &delete_cmd])

