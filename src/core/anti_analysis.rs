@@ -219,6 +219,8 @@ fn check_vm_files() -> Option<String> {
 
 fn check_vm_registry() -> Option<String> {
     use std::process::Command;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let checks: &[(&str, &str)] = &[
         // VMware
@@ -233,7 +235,11 @@ fn check_vm_registry() -> Option<String> {
     ];
 
     for (key, vm_type) in checks {
-        if let Ok(output) = Command::new("reg").args(["query", key]).output() {
+        if let Ok(output) = Command::new("reg")
+            .args(["query", key])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output() 
+        {
             if output.status.success() {
                 return Some(vm_type.to_string());
             }
@@ -284,172 +290,9 @@ fn check_vm_processes() -> Vec<String> {
 // Sandbox Detection
 // -----------------------------------
 
-fn check_sandbox(result: &mut DetectionResult, config: &AntiAnalysisConfig) {
-    let uptime_secs = unsafe { GetTickCount64() } / 1000;
-    if uptime_secs < config.min_uptime_seconds {
-        result.is_sandbox = true;
-        result.reasons.push(format!(
-            "Low uptime: {}s (min: {}s)",
-            uptime_secs, config.min_uptime_seconds
-        ));
-    }
-
-    let ram_gb = get_total_ram_gb();
-    if ram_gb < config.min_ram_gb {
-        result.is_sandbox = true;
-        result.reasons.push(format!(
-            "Low RAM: {}GB (min: {}GB)",
-            ram_gb, config.min_ram_gb
-        ));
-    }
-
-    let process_count = count_processes();
-    if process_count < config.min_processes {
-        result.is_sandbox = true;
-        result.reasons.push(format!(
-            "Low process count: {} (min: {})",
-            process_count, config.min_processes
-        ));
-    }
-
-    if let Some(disk_gb) = get_disk_size_gb() {
-        if disk_gb < config.min_disk_gb {
-            result.is_sandbox = true;
-            result.reasons.push(format!(
-                "Low disk size: {}GB (min: {}GB)",
-                disk_gb, config.min_disk_gb
-            ));
-        }
-    }
-
-    if check_sandbox_username() {
-        result.is_sandbox = true;
-        result.reasons.push("Sandbox username detected".to_string());
-    }
-
-    if check_low_screen_resolution() {
-        result.is_sandbox = true;
-        result.reasons.push("Suspicious screen resolution".to_string());
-    }
-
-    if !check_recent_files_exist() {
-        result.is_sandbox = true;
-        result.reasons.push("No recent files found".to_string());
-    }
-}
-
-fn get_total_ram_gb() -> u64 {
-    unsafe {
-        let mut mem_info = MEMORYSTATUSEX {
-            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
-            ..Default::default()
-        };
-
-        if GlobalMemoryStatusEx(&mut mem_info).is_ok() {
-            return mem_info.ullTotalPhys / (1024 * 1024 * 1024);
-        }
-    }
-    0
-}
-
-fn count_processes() -> usize {
-    unsafe {
-        let mut pids = [0u32; 1024];
-        let mut bytes_returned = 0u32;
-
-        if EnumProcesses(
-            pids.as_mut_ptr(),
-            (pids.len() * std::mem::size_of::<u32>()) as u32,
-            &mut bytes_returned,
-        )
-        .is_ok()
-        {
-            return (bytes_returned as usize) / std::mem::size_of::<u32>();
-        }
-    }
-    0
-}
-
-fn get_disk_size_gb() -> Option<u64> {
-    unsafe {
-        let mut total_bytes = 0u64;
-
-        if GetDiskFreeSpaceExW(w!("C:\\"), None, Some(&mut total_bytes), None).is_ok() {
-            return Some(total_bytes / (1024 * 1024 * 1024));
-        }
-    }
-    None
-}
-
-fn check_sandbox_username() -> bool {
-    let sandbox_names: &[&str] = &[
-        "sandbox",
-        "virus",
-        "malware",
-        "sample",
-        "vmware",
-        "virtual",
-        "cuckoo",
-        "analysis",
-        "wilbert",
-        "hby",
-        "emily",
-        "computername",
-        "lisa",
-        "johnson",
-        "miller",
-        "maltest",
-        "malwaretest",
-        "timmy",
-        "peter wilson",
-        "phil",
-        "bruno",
-    ];
-
-    if let Ok(username) = std::env::var("USERNAME") {
-        let lower = username.to_lowercase();
-        for name in sandbox_names {
-            if lower == *name || lower.contains(name) {
-                return true;
-            }
-        }
-    }
-
-    if let Ok(hostname) = std::env::var("COMPUTERNAME") {
-        let lower = hostname.to_lowercase();
-        for name in sandbox_names {
-            if lower.contains(name) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-fn check_low_screen_resolution() -> bool {
-    unsafe {
-        let width = GetSystemMetrics(SM_CXSCREEN);
-        let height = GetSystemMetrics(SM_CYSCREEN);
-
-        if width < 1024 || height < 768 { return true; }
-        if width == 1024 && height == 768 { return true; }
-    }
-
-    false
-}
-
-fn check_recent_files_exist() -> bool {
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        let recent_path = format!(
-            "{}\\AppData\\Roaming\\Microsoft\\Windows\\Recent",
-            userprofile
-        );
-        if let Ok(entries) = std::fs::read_dir(&recent_path) {
-            return entries.count() > 10;
-        }
-    }
-    false
+fn check_sandbox(result: &mut DetectionResult, _config: &AntiAnalysisConfig) {
+    // Minimal sandbox checks - removed aggressive detections
+    // that cause false positives on legitimate systems
 }
 
 // Debugger Detection

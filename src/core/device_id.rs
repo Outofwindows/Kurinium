@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct DeviceId;
 
@@ -76,6 +79,7 @@ impl DeviceId {
         let output = Command::new("wmic")
             .arg("/format:list")
             .arg(query)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()?;
 
         if output.status.success() {

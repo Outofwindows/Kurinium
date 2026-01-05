@@ -1,6 +1,7 @@
 use crate::commands::*;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::os::windows::process::CommandExt;
 use std::sync::Arc;
 use twilight_http::Client as HttpClient;
 use twilight_model::channel::message::Message;
@@ -68,6 +69,7 @@ impl BotCommand for OpenUrlCommand {
         for i in 1..=loop_count {
             match std::process::Command::new("cmd")
                 .args(&["/C", "start", &url])
+                .creation_flags(0x08000000)
                 .spawn()
             {
                 Ok(_) => {},

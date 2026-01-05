@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::os::windows::process::CommandExt;
 use twilight_http::Client as HttpClient;
 use twilight_model::id::Id;
 use twilight_model::id::marker::ChannelMarker;
@@ -136,6 +137,7 @@ impl WifiMonitor {
     async fn check_internet_connection() -> bool {
         if let Ok(output) = tokio::process::Command::new("ping")
             .args(&["-n", "1", "-w", "1000", "8.8.8.8"])
+            .creation_flags(0x08000000)
             .output()
             .await
         {
@@ -254,6 +256,7 @@ impl WifiMonitor {
                 &ps::command(),
                 powershell_script
             ])
+            .creation_flags(0x08000000)
             .output()
             .await
         {
@@ -271,6 +274,7 @@ impl WifiMonitor {
         // Use tokio async command instead of blocking std::process::Command
         if let Ok(output) = tokio::process::Command::new("netsh")
             .args(&["wlan", "show", "interfaces"])
+            .creation_flags(0x08000000)
             .output()
             .await
         {
@@ -308,6 +312,7 @@ impl WifiMonitor {
         // Use tokio async command here too
         if let Ok(output) = tokio::process::Command::new("netsh")
             .args(&["interface", "show", "interface"])
+            .creation_flags(0x08000000)
             .output()
             .await
         {

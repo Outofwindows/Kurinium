@@ -2,7 +2,8 @@ use crate::commands::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::os::windows::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::process::Command;
 use twilight_http::Client as HttpClient;
 use twilight_model::channel::message::Message;
 
@@ -81,7 +82,8 @@ impl ShellCommand {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW flag
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()?;
+            .output()
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -112,7 +114,8 @@ impl ShellCommand {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW flag
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()?;
+            .output()
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

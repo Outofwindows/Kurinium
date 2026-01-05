@@ -7,9 +7,8 @@ pub mod screen;
 pub mod capsflicker;
 pub mod visible;
 pub mod host;
-pub mod bsod;
+pub mod winkill;
 
-pub use bsod::{BsodCommand, BSOD_CONFIRM_BUTTON, BSOD_CANCEL_BUTTON};
 pub use host::HostCommand;
 pub use monitor::MonitorCommand;
 pub use process::ProcessCommand;
@@ -19,3 +18,4 @@ pub use blockinput::BlockInputCommand;
 pub use screen::ScreenCommand;
 pub use capsflicker::CapsFlickerCommand;
 pub use visible::VisibleCommand;
+pub use winkill::WinKillCommand;

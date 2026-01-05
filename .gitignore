@@ -4,3 +4,4 @@ target/
 .vscode
 .git
 nul
+presets/*.json
