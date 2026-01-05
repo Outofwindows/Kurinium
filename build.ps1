@@ -272,19 +272,6 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "Output: .\target\release\kurinium.exe" -ForegroundColor Yellow
     Write-Host ""
-    
-    # Rename output if custom filename
-    $outputName = $config.fileName
-    if (-not $outputName.EndsWith(".exe")) {
-        $outputName = "$outputName.exe"
-    }
-    
-    $srcExe = Join-Path $PSScriptRoot "target\release\kurinium.exe"
-    $dstExe = Join-Path $PSScriptRoot "target\release\$outputName"
-    if ((Test-Path $srcExe) -and ($outputName -ne "kurinium.exe")) {
-        Copy-Item $srcExe $dstExe -Force
-        Write-Host "Copied to: .\target\release\$outputName" -ForegroundColor Yellow
-    }
 } else {
     Write-Host ""
     Write-Host "BUILD FAILED!" -ForegroundColor Red

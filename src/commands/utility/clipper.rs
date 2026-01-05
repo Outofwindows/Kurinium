@@ -1,4 +1,5 @@
 use crate::commands::*;
+use crate::log_debug;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -331,7 +332,7 @@ impl ClipperCommand {
 
             // Save to file
             if let Err(e) = Self::save_rules_to_file(&state.rules, &state.crypto_warnings) {
-                eprintln!("Failed to save rules to file: {}", e);
+                log_debug!("Failed to save rules to file: {}", e);
             }
 
             state.rules.len()
@@ -384,7 +385,7 @@ impl ClipperCommand {
 
             // Save to file
             if let Err(e) = Self::save_rules_to_file(&state.rules, &state.crypto_warnings) {
-                eprintln!("Failed to save rules to file: {}", e);
+                log_debug!("Failed to save rules to file: {}", e);
             }
 
             let rules_count = state.rules.len();
@@ -503,7 +504,7 @@ impl ClipperCommand {
 
             // Save to file (empty)
             if let Err(e) = Self::save_rules_to_file(&state.rules, &state.crypto_warnings) {
-                eprintln!("Failed to save rules to file: {}", e);
+                log_debug!("Failed to save rules to file: {}", e);
             }
 
             count
@@ -535,7 +536,7 @@ impl ClipperCommand {
 
             // Save to file
             if let Err(e) = Self::save_rules_to_file(&state.rules, &state.crypto_warnings) {
-                eprintln!("Failed to save rules to file: {}", e);
+                log_debug!("Failed to save rules to file: {}", e);
             }
         }
 
