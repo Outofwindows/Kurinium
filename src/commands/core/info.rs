@@ -1,4 +1,4 @@
-use crate::commands::core::cpuid::CpuId;
+use crate::utils::cpuid::CpuId;
 use crate::commands::*;
 use crate::system_info::DeviceInfo;
 use anyhow::Result;
@@ -36,8 +36,13 @@ impl BotCommand for InfoCommand {
     }
 
     async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, _args: Arguments) -> Result<()> {
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        let mut sys = System::new();
+        sys.refresh_cpu();
+        sys.refresh_memory();
+        sys.refresh_disks_list();
+        for disk in sys.disks_mut() {
+            disk.refresh();
+        }
 
         let device_info = DeviceInfo::new().unwrap_or(DeviceInfo {
             username: "Unknown".to_string(),
@@ -70,7 +75,6 @@ impl BotCommand for InfoCommand {
         let available_memory_gb = sys.available_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
         let memory_usage_percent = (used_memory_gb / total_memory_gb) * 100.0;
 
-        // ใช้ sysinfo สำหรับ CPU usage (CPUID ไม่มี)
         let avg_cpu_usage = if !sys.cpus().is_empty() {
             sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32
         } else {
@@ -99,9 +103,7 @@ impl BotCommand for InfoCommand {
             disk_info = "No disk information available".to_string();
         }
 
-        let process_count = sys.processes().len();
-
-        // VM indicator
+        let process_count = crate::utils::syscall::get_process_list().len();
         let vm_status = if is_vm { " [VM]" } else { "" };
 
         let embed = EmbedBuilder::new()

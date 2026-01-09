@@ -1,9 +1,5 @@
-use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use std::env;
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
-use winapi::um::winnt::PROCESS_TERMINATE;
-
+use crate::utils::syscall::{self, access};
 use crate::config::Config;
 use crate::core::exit_patcher::safe_exit;
 use crate::utils::admin::is_process_elevated;
@@ -16,46 +12,39 @@ pub fn singleton_prcess(current_is_admin: bool) {
 
     let mut names_to_check = std::collections::HashSet::new();
     if let Some(name) = current_exe_path.file_name().and_then(|n| n.to_str()) {
-        names_to_check.insert(name.to_string());
+        names_to_check.insert(name.to_lowercase());
     }
-    names_to_check.insert(Config::get_exe_name().to_string());
+    names_to_check.insert(Config::get_exe_name().to_lowercase());
 
-    let s = System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
-    );
+    let processes = syscall::get_process_list();
 
-    for name in names_to_check {
-        for process in s.processes_by_name(&name) {
-            let pid = process.pid().as_u32();
-            if pid == current_pid {
-                continue; // Don't kill self
-            }
+    for (pid, proc_name) in processes {
+        if pid == current_pid {
+            continue;
+        }
 
-            let other_is_admin = is_process_elevated(pid);
+        let proc_lower = proc_name.to_lowercase();
+        if !names_to_check.iter().any(|n| proc_lower.contains(n)) {
+            continue;
+        }
 
-            if current_is_admin {
-                // Admin kills everyone
-                terminate_process(pid);
+        let other_is_admin = is_process_elevated(pid);
+
+        if current_is_admin {
+            terminate_process(pid);
+        } else {
+            if other_is_admin {
+                safe_exit(0);
             } else {
-                // Non-admin sees an admin, non-admin must die
-                if other_is_admin {
-                    safe_exit(0); // std::process::exit(0);
-                } else {
-                    // Non-admin sees another non-admin, kill it
-                    terminate_process(pid);
-                }
+                terminate_process(pid);
             }
         }
     }
 }
 
-// Terminate a process by PID
 fn terminate_process(pid: u32) {
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if !handle.is_null() {
-            TerminateProcess(handle, 1);
-            CloseHandle(handle);
-        }
+    if let Some(handle) = syscall::nt_open_process(pid, access::PROCESS_TERMINATE) {
+        syscall::nt_terminate_process(handle, 1);
+        syscall::nt_close(handle);
     }
 }

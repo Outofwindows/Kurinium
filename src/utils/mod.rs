@@ -3,4 +3,6 @@ pub mod formatting;
 pub mod logger;
 pub mod obfuscate;
 pub mod ps_encoder;
+pub mod syscall;
 pub mod token;
+pub mod cpuid;

@@ -1,68 +1,50 @@
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcess, OpenProcessToken};
 use winapi::um::securitybaseapi::GetTokenInformation;
-use winapi::um::winnt::{
-    TokenElevation, PROCESS_QUERY_INFORMATION, TOKEN_ELEVATION, TOKEN_QUERY,
-};
+use winapi::um::winnt::{TokenElevation, TOKEN_ELEVATION};
+use crate::utils::syscall::{self, access, token_access};
 
 pub fn is_admin() -> bool {
-    unsafe {
-        let mut token_handle = std::mem::zeroed();
-        let current_process = GetCurrentProcess();
-
-        if OpenProcessToken(current_process, TOKEN_QUERY, &mut token_handle) != 0 {
-            let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
-            let mut size = std::mem::size_of_val(&elevation) as u32;
-
-            let result = GetTokenInformation(
-                token_handle,
-                TokenElevation,
-                &mut elevation as *mut _ as *mut _,
-                size,
-                &mut size,
-            );
-
-            CloseHandle(token_handle);
-
-            if result != 0 {
-                return elevation.TokenIsElevated != 0;
-            }
-        }
-        false
-    }
+    let current_process = syscall::nt_current_process();    
+    let Some(token_handle) = syscall::nt_open_process_token(current_process, token_access::TOKEN_QUERY) else {
+        return false;
+    };
+    
+    let is_elevated = check_token_elevation(token_handle as *mut std::ffi::c_void);
+    syscall::nt_close(token_handle);
+    
+    is_elevated
 }
 
 pub fn is_process_elevated(pid: u32) -> bool {
+    let Some(proc_handle) = syscall::nt_open_process(pid, access::PROCESS_QUERY_INFORMATION) else {
+        return false;
+    };
+    
+    let Some(token_handle) = syscall::nt_open_process_token(proc_handle, token_access::TOKEN_QUERY) else {
+        syscall::nt_close(proc_handle);
+        return false;
+    };
+    
+    let is_elevated = check_token_elevation(token_handle as *mut std::ffi::c_void);
+    
+    syscall::nt_close(token_handle);
+    syscall::nt_close(proc_handle);
+    
+    is_elevated
+}
+
+fn check_token_elevation(token_handle: *mut std::ffi::c_void) -> bool {
     unsafe {
-        let proc_handle = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
-        if proc_handle.is_null() {
-            return false; // Cannot open process, assume not elevated
-        }
-
-        let mut token_handle = std::mem::zeroed();
-        let success = OpenProcessToken(proc_handle, TOKEN_QUERY, &mut token_handle) != 0;
-
-        let mut is_elevated = false;
-        if success {
-            let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
-            let mut size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
-            let result = GetTokenInformation(
-                token_handle,
-                TokenElevation,
-                &mut elevation as *mut _ as *mut _,
-                size,
-                &mut size,
-            );
-            if result != 0 {
-                is_elevated = elevation.TokenIsElevated != 0;
-            }
-        }
-
-        if !token_handle.is_null() {
-            CloseHandle(token_handle);
-        }
-        CloseHandle(proc_handle);
-
-        is_elevated
+        let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+        
+        let result = GetTokenInformation(
+            token_handle,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            size,
+            &mut size,
+        );
+        
+        result != 0 && elevation.TokenIsElevated != 0
     }
 }

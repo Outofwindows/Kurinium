@@ -19,7 +19,7 @@ impl BotCommand for CdCommand {
 
     async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, args: Arguments) -> Result<()> {
         let dir_path_owned = args.rest();
-        let dir_path = dir_path_owned.trim();
+        let dir_path = dir_path_owned.trim().trim_matches('"');
 
         if dir_path.is_empty() {
             // Show current directory

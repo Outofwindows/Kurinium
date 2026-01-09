@@ -1,9 +1,6 @@
 use anyhow::Result;
-use sysinfo::{PidExt, ProcessExt, System, SystemExt};
-use winapi::shared::ntdef::HANDLE;
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::processthreadsapi::OpenProcess;
-use winapi::um::winnt::{PROCESS_QUERY_INFORMATION, PROCESS_TERMINATE};
+use sysinfo::{System, SystemExt};
+use crate::utils::syscall::{self, access};
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -23,29 +20,31 @@ pub struct ProcessManager {
 
 impl ProcessManager {
     pub fn new() -> Self {
-        let mut system = System::new_all();
-        system.refresh_all();
+        let mut system = System::new();
+        system.refresh_memory();
+        system.refresh_cpu();
         Self { system }
     }
 
     pub fn refresh(&mut self) {
-        self.system.refresh_all();
+        self.system.refresh_memory();
+        self.system.refresh_cpu();
     }
 
     pub fn list_processes(&mut self) -> Vec<ProcessInfo> {
         self.refresh();
         let mut processes = Vec::new();
-
-        for (pid, process) in self.system.processes() {
+        let sys_procs = syscall::get_detailed_process_list();
+        for proc in sys_procs {
             let info = ProcessInfo {
-                pid: pid.as_u32(),
-                name: process.name().to_string(),
-                cmdline: process.cmd().join(" "),
-                parent_pid: process.parent().map(|p| p.as_u32()),
-                memory_usage: process.memory(),
-                cpu_usage: process.cpu_usage(),
-                start_time: process.start_time(),
-                status: format!("{:?}", process.status()),
+                pid: proc.pid,
+                name: proc.name,
+                cmdline: String::new(),
+                parent_pid: Some(proc.parent_pid),
+                memory_usage: proc.memory_usage, // Bytes
+                cpu_usage: 0.0,
+                start_time: proc.start_time,
+                status: "Run".to_string(),
             };
             processes.push(info);
         }
@@ -56,71 +55,36 @@ impl ProcessManager {
     }
 
     pub fn get_process_by_pid(&mut self, pid: u32) -> Option<ProcessInfo> {
-        self.refresh();
-        let pid = sysinfo::Pid::from(pid as usize);
-
-        if let Some(process) = self.system.process(pid) {
-            Some(ProcessInfo {
-                pid: pid.as_u32(),
-                name: process.name().to_string(),
-                cmdline: process.cmd().join(" "),
-                parent_pid: process.parent().map(|p| p.as_u32()),
-                memory_usage: process.memory(),
-                cpu_usage: process.cpu_usage(),
-                start_time: process.start_time(),
-                status: format!("{:?}", process.status()),
-            })
-        } else {
-            None
-        }
+        self.list_processes().into_iter().find(|p| p.pid == pid)
     }
 
     pub fn find_processes_by_name(&mut self, name: &str) -> Vec<ProcessInfo> {
-        self.refresh();
-        let mut processes = Vec::new();
-
-        for (pid, process) in self.system.processes() {
-            if process.name().to_lowercase().contains(&name.to_lowercase()) {
-                let info = ProcessInfo {
-                    pid: pid.as_u32(),
-                    name: process.name().to_string(),
-                    cmdline: process.cmd().join(" "),
-                    parent_pid: process.parent().map(|p| p.as_u32()),
-                    memory_usage: process.memory(),
-                    cpu_usage: process.cpu_usage(),
-                    start_time: process.start_time(),
-                    status: format!("{:?}", process.status()),
-                };
-                processes.push(info);
-            }
-        }
-
-        processes.sort_by_key(|p| p.pid);
-        processes
+        let name_lower = name.to_lowercase();
+        self.list_processes()
+            .into_iter()
+            .filter(|p| p.name.to_lowercase().contains(&name_lower))
+            .collect()
     }
 
     pub fn kill_process(&mut self, pid: u32) -> Result<()> {
-        unsafe {
-            let handle: HANDLE = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return Err(anyhow::anyhow!("Failed to open process: {}", pid));
-            }
+        let handle = syscall::nt_open_process(pid, access::PROCESS_TERMINATE | access::PROCESS_QUERY_INFORMATION)
+            .ok_or_else(|| anyhow::anyhow!("Failed to open process: {}", pid))?;
 
-            let result = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
-            CloseHandle(handle);
+        let success = syscall::nt_terminate_process(handle, 1);
+        syscall::nt_close(handle);
 
-            if result == 0 {
-                Err(anyhow::anyhow!("Failed to terminate process: {}", pid))
-            } else {
-                Ok(())
-            }
+        if success {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to terminate process: {}", pid))
         }
     }
 
     pub fn get_system_info(&mut self) -> SystemInfo {
         self.refresh();
+        let proc_count = syscall::get_process_list().len();
         SystemInfo {
-            process_count: self.system.processes().len(),
+            process_count: proc_count,
         }
     }
 }

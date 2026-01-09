@@ -10,7 +10,6 @@ use tokio::sync::Mutex;
 use crate::config::WifiMonitorConfig;
 
 // @note: Using tokio::process::Command directly in async functions to avoid blocking
-
 pub struct WifiMonitor {
     http: Arc<HttpClient>,
     channel_id: Id<ChannelMarker>,

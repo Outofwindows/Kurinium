@@ -7,7 +7,6 @@ use chrono::Local;
 
 static LOG_FILE: Lazy<Mutex<Option<File>>> = Lazy::new(|| Mutex::new(None));
 
-/// Initialize the file logger - creates log file next to the executable
 pub fn init_logger() {
     let log_path = get_log_path();
     
@@ -22,14 +21,12 @@ pub fn init_logger() {
     }
 }
 
-/// Get the path for the log file (same directory as exe)
 fn get_log_path() -> PathBuf {
     let exe_path = std::env::current_exe().unwrap_or_default();
     let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
     exe_dir.join("debug.log")
 }
 
-/// Log a message to the file
 pub fn log(message: &str) {
     if let Ok(mut guard) = LOG_FILE.lock() {
         if let Some(ref mut file) = *guard {
@@ -40,7 +37,6 @@ pub fn log(message: &str) {
     }
 }
 
-/// Log with format support
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {

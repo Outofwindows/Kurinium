@@ -30,11 +30,7 @@ impl BotCommand for GetCommand {
         let file_path_owned = args.rest();
         let file_path_trimmed = file_path_owned.trim();
 
-        let file_path = file_path_trimmed
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .or_else(|| file_path_trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-            .unwrap_or(file_path_trimmed);
+        let file_path = file_path_trimmed.trim_matches('"').trim_matches('\'');
 
         if file_path.is_empty() {
             http.create_message(msg.channel_id)

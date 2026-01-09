@@ -85,6 +85,7 @@ strip = true
 panic = "abort"
 overflow-checks = false
 debug = false
+split-debuginfo = "off"
 debug-assertions = false
 incremental = false
 rpath = false
