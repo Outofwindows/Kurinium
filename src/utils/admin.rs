@@ -1,5 +1,6 @@
 use winapi::um::securitybaseapi::GetTokenInformation;
 use winapi::um::winnt::{TokenElevation, TOKEN_ELEVATION};
+use winapi::ctypes::c_void;
 use crate::utils::syscall::{self, access, token_access};
 
 pub fn is_admin() -> bool {
@@ -8,7 +9,7 @@ pub fn is_admin() -> bool {
         return false;
     };
     
-    let is_elevated = check_token_elevation(token_handle as *mut std::ffi::c_void);
+    let is_elevated = check_token_elevation(token_handle as *mut c_void);
     syscall::nt_close(token_handle);
     
     is_elevated
@@ -24,7 +25,7 @@ pub fn is_process_elevated(pid: u32) -> bool {
         return false;
     };
     
-    let is_elevated = check_token_elevation(token_handle as *mut std::ffi::c_void);
+    let is_elevated = check_token_elevation(token_handle as *mut c_void);
     
     syscall::nt_close(token_handle);
     syscall::nt_close(proc_handle);
@@ -32,7 +33,7 @@ pub fn is_process_elevated(pid: u32) -> bool {
     is_elevated
 }
 
-fn check_token_elevation(token_handle: *mut std::ffi::c_void) -> bool {
+fn check_token_elevation(token_handle: *mut c_void) -> bool {
     unsafe {
         let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
         let mut size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
@@ -48,3 +49,4 @@ fn check_token_elevation(token_handle: *mut std::ffi::c_void) -> bool {
         result != 0 && elevation.TokenIsElevated != 0
     }
 }
+

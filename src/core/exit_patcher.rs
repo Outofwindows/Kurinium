@@ -1,14 +1,12 @@
-#![allow(static_mut_refs)]
-
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use dinvk::module::{get_module_address, get_proc_address};
-use dinvk::syscall;
-use dinvk::types::HANDLE;
-use dinvk::winapis::NT_SUCCESS;
+use uwd::{syscall, AsPointer};
+
+type HANDLE = *mut c_void;
 
 const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
@@ -64,8 +62,11 @@ struct ExitFunction {
     is_patched: bool,
 }
 
+unsafe impl Send for ExitFunction {}
+unsafe impl Sync for ExitFunction {}
+
 impl ExitFunction {
-    const fn new(module_fn: fn() -> &'static str, function_fn: fn() -> &'static str) -> Self {
+    fn new(module_fn: fn() -> &'static str, function_fn: fn() -> &'static str) -> Self {
         Self {
             module_fn,
             function_fn,
@@ -79,15 +80,20 @@ impl ExitFunction {
     fn function(&self) -> &'static str { (self.function_fn)() }
 }
 
-static mut EXIT_FUNCTIONS: [ExitFunction; 7] = [
-    ExitFunction::new(mod_kernelbase, fn_terminate_process),
-    ExitFunction::new(mod_kernel32,   fn_terminate_process),
-    ExitFunction::new(mod_kernelbase, fn_exit_process),
-    ExitFunction::new(mod_kernel32,   fn_exit_process),
-    ExitFunction::new(mod_mscoree,    fn_cor_exit_process),
-    ExitFunction::new(mod_ntdll,      fn_nt_terminate_process),
-    ExitFunction::new(mod_ntdll,      fn_rtl_exit_user_process),
-];
+fn get_exit_functions() -> &'static Mutex<Vec<ExitFunction>> {
+    static EXIT_FUNCTIONS: OnceLock<Mutex<Vec<ExitFunction>>> = OnceLock::new();
+    EXIT_FUNCTIONS.get_or_init(|| {
+        Mutex::new(vec![
+            ExitFunction::new(mod_kernelbase, fn_terminate_process),
+            ExitFunction::new(mod_kernel32,   fn_terminate_process),
+            ExitFunction::new(mod_kernelbase, fn_exit_process),
+            ExitFunction::new(mod_kernel32,   fn_exit_process),
+            ExitFunction::new(mod_mscoree,    fn_cor_exit_process),
+            ExitFunction::new(mod_ntdll,      fn_nt_terminate_process),
+            ExitFunction::new(mod_ntdll,      fn_rtl_exit_user_process),
+        ])
+    })
+}
 
 #[cfg(target_arch = "x86_64")]
 const SHELLCODE_SIZE: usize = 19;
@@ -106,34 +112,34 @@ pub fn patch_exit() -> bool {
     let mut patched_addresses: HashSet<usize> = HashSet::new();
     let mut patch_count = 0;
 
-    unsafe {
-        for func in EXIT_FUNCTIONS.iter_mut() {
-            let addr = get_function_address(func.module(), func.function());
-            if addr.is_none() {
-                continue;
-            }
+    let Ok(mut funcs) = get_exit_functions().lock() else {
+        return false;
+    };
 
-            let func_addr = addr.unwrap();
-            let addr_usize = func_addr as usize;
+    for func in funcs.iter_mut() {
+        let Some(func_addr) = get_function_address(func.module(), func.function()) else {
+            continue;
+        };
 
-            if patched_addresses.contains(&addr_usize) {
-                continue;
-            }
+        let addr_usize = func_addr as usize;
 
-            func.address = addr;
-
-            if !read_memory(func_addr, &mut func.original_bytes[..SHELLCODE_SIZE]) {
-                continue;
-            }
-
-            if !write_memory_syscall(func_addr, &shellcode) {
-                continue;
-            }
-
-            func.is_patched = true;
-            patched_addresses.insert(addr_usize);
-            patch_count += 1;
+        if patched_addresses.contains(&addr_usize) {
+            continue;
         }
+
+        func.address = Some(func_addr);
+
+        if !read_memory(func_addr, &mut func.original_bytes[..SHELLCODE_SIZE]) {
+            continue;
+        }
+
+        if !write_memory_syscall(func_addr, &shellcode) {
+            continue;
+        }
+
+        func.is_patched = true;
+        patched_addresses.insert(addr_usize);
+        patch_count += 1;
     }
 
     patch_count > 0
@@ -142,41 +148,48 @@ pub fn patch_exit() -> bool {
 pub fn reset_exit_functions() {
     let mut reset_addresses: HashSet<usize> = HashSet::new();
 
-    unsafe {
-        for func in EXIT_FUNCTIONS.iter_mut() {
-            if !func.is_patched {
+    let Ok(mut funcs) = get_exit_functions().lock() else {
+        return;
+    };
+
+    for func in funcs.iter_mut() {
+        if !func.is_patched {
+            continue;
+        }
+
+        if let Some(addr) = func.address {
+            let addr_usize = addr as usize;
+
+            if reset_addresses.contains(&addr_usize) {
+                func.is_patched = false;
                 continue;
             }
 
-            if let Some(addr) = func.address {
-                let addr_usize = addr as usize;
-
-                if reset_addresses.contains(&addr_usize) {
-                    func.is_patched = false;
-                    continue;
-                }
-
-                if write_memory_syscall(addr, &func.original_bytes[..SHELLCODE_SIZE]) {
-                    func.is_patched = false;
-                    reset_addresses.insert(addr_usize);
-                }
+            if write_memory_syscall(addr, &func.original_bytes[..SHELLCODE_SIZE]) {
+                func.is_patched = false;
+                reset_addresses.insert(addr_usize);
             }
         }
     }
 }
 
 pub fn is_patched() -> bool {
-    unsafe { EXIT_FUNCTIONS.iter().any(|f| f.is_patched) }
+    let Ok(funcs) = get_exit_functions().lock() else {
+        return false;
+    };
+    funcs.iter().any(|f| f.is_patched)
 }
 
 pub fn get_patched_functions() -> Vec<String> {
     let mut result = Vec::new();
 
-    unsafe {
-        for func in EXIT_FUNCTIONS.iter() {
-            if func.is_patched {
-                result.push(format!("{}!{}", func.module(), func.function()));
-            }
+    let Ok(funcs) = get_exit_functions().lock() else {
+        return result;
+    };
+
+    for func in funcs.iter() {
+        if func.is_patched {
+            result.push(format!("{}!{}", func.module(), func.function()));
         }
     }
 
@@ -273,21 +286,19 @@ fn write_memory_syscall(addr: *mut c_void, data: &[u8]) -> bool {
         let mut region_size = data.len();
         let mut old_protect: u32 = 0;
 
-        let status = syscall!(
-            obfstr::obfstr!("NtProtectVirtualMemory"),
+        let status = match syscall!(
+            "NtProtectVirtualMemory",
             process_handle,
-            &mut base_address as *mut *mut c_void,
-            &mut region_size,
+            base_address.as_ptr_mut(),
+            region_size.as_ptr_mut(),
             PAGE_EXECUTE_READWRITE,
-            &mut old_protect
-        );
-
-        let status = match status {
-            Some(s) => s,
-            None => return false,
+            old_protect.as_ptr_mut()
+        ) {
+            Ok(s) => s as i32,
+            Err(_) => return false,
         };
 
-        if !NT_SUCCESS(status) {
+        if status < 0 {
             return false;
         }
 
@@ -298,12 +309,12 @@ fn write_memory_syscall(addr: *mut c_void, data: &[u8]) -> bool {
         let mut _dummy: u32 = 0;
 
         let _ = syscall!(
-            obfstr::obfstr!("NtProtectVirtualMemory"),
+            "NtProtectVirtualMemory",
             process_handle,
-            &mut base_address as *mut *mut c_void,
-            &mut region_size,
+            base_address.as_ptr_mut(),
+            region_size.as_ptr_mut(),
             old_protect,
-            &mut _dummy
+            _dummy.as_ptr_mut()
         );
 
         true
@@ -318,34 +329,34 @@ pub fn patch_exit_with_handler(handler: extern "system" fn(u32)) -> bool {
     let mut patched_addresses: HashSet<usize> = HashSet::new();
     let mut patch_count = 0;
 
-    unsafe {
-        for func in EXIT_FUNCTIONS.iter_mut() {
-            let addr = get_function_address(func.module(), func.function());
-            if addr.is_none() {
-                continue;
-            }
+    let Ok(mut funcs) = get_exit_functions().lock() else {
+        return false;
+    };
 
-            let func_addr = addr.unwrap();
-            let addr_usize = func_addr as usize;
+    for func in funcs.iter_mut() {
+        let Some(func_addr) = get_function_address(func.module(), func.function()) else {
+            continue;
+        };
 
-            if patched_addresses.contains(&addr_usize) {
-                continue;
-            }
+        let addr_usize = func_addr as usize;
 
-            func.address = addr;
-
-            if !read_memory(func_addr, &mut func.original_bytes[..SHELLCODE_SIZE]) {
-                continue;
-            }
-
-            if !write_memory_syscall(func_addr, &shellcode) {
-                continue;
-            }
-
-            func.is_patched = true;
-            patched_addresses.insert(addr_usize);
-            patch_count += 1;
+        if patched_addresses.contains(&addr_usize) {
+            continue;
         }
+
+        func.address = Some(func_addr);
+
+        if !read_memory(func_addr, &mut func.original_bytes[..SHELLCODE_SIZE]) {
+            continue;
+        }
+
+        if !write_memory_syscall(func_addr, &shellcode) {
+            continue;
+        }
+
+        func.is_patched = true;
+        patched_addresses.insert(addr_usize);
+        patch_count += 1;
     }
 
     patch_count > 0
@@ -355,12 +366,14 @@ pub fn patch_exit_with_handler(handler: extern "system" fn(u32)) -> bool {
 pub fn get_patch_info() -> Vec<(String, usize, bool)> {
     let mut info = Vec::new();
 
-    unsafe {
-        for func in EXIT_FUNCTIONS.iter() {
-            let name = format!("{}!{}", func.module(), func.function());
-            let addr = func.address.map(|a| a as usize).unwrap_or(0);
-            info.push((name, addr, func.is_patched));
-        }
+    let Ok(funcs) = get_exit_functions().lock() else {
+        return info;
+    };
+
+    for func in funcs.iter() {
+        let name = format!("{}!{}", func.module(), func.function());
+        let addr = func.address.map(|a| a as usize).unwrap_or(0);
+        info.push((name, addr, func.is_patched));
     }
 
     info

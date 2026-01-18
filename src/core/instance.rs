@@ -9,7 +9,6 @@ pub fn singleton_prcess(current_is_admin: bool) {
         return;
     };
     let current_pid = std::process::id();
-
     let mut names_to_check = std::collections::HashSet::new();
     if let Some(name) = current_exe_path.file_name().and_then(|n| n.to_str()) {
         names_to_check.insert(name.to_lowercase());
@@ -17,7 +16,6 @@ pub fn singleton_prcess(current_is_admin: bool) {
     names_to_check.insert(Config::get_exe_name().to_lowercase());
 
     let processes = syscall::get_process_list();
-
     for (pid, proc_name) in processes {
         if pid == current_pid {
             continue;
@@ -29,15 +27,12 @@ pub fn singleton_prcess(current_is_admin: bool) {
         }
 
         let other_is_admin = is_process_elevated(pid);
-
         if current_is_admin {
             terminate_process(pid);
         } else {
             if other_is_admin {
                 safe_exit(0);
-            } else {
-                terminate_process(pid);
-            }
+            } else { terminate_process(pid); }
         }
     }
 }

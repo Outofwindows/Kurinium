@@ -1,7 +1,8 @@
-use dinvk::syscall;
-use dinvk::types::HANDLE;
+use uwd::{syscall, AsPointer}; // using uwd for stack spoofing
 use std::ffi::c_void;
 use std::ptr::null_mut;
+
+pub type HANDLE = *mut c_void;
 
 // OBJECT_ATTRIBUTES for NT functions
 #[repr(C)]
@@ -34,7 +35,7 @@ pub struct ClientId {
     pub unique_thread: *mut c_void,
 }
 
-// Returns process handle or null on failure
+// NtOpenProcess with call stack spoofing
 pub fn nt_open_process(pid: u32, desired_access: u32) -> Option<HANDLE> {
     let mut handle: HANDLE = null_mut();    
     let mut obj_attr = ObjectAttributes::default();
@@ -45,36 +46,38 @@ pub fn nt_open_process(pid: u32, desired_access: u32) -> Option<HANDLE> {
     
     let status = syscall!(
         "NtOpenProcess",
-        &mut handle,
+        handle.as_ptr_mut(),
         desired_access,
-        &mut obj_attr,
-        &mut client_id
-    )?;
+        &mut obj_attr as *mut ObjectAttributes,
+        &mut client_id as *mut ClientId
+    ).ok()? as i32;
     
     if status >= 0 {
         Some(handle)
-    } else { None }
+    } else { 
+        None 
+    }
 }
 
-// NtTerminateProcess
+// NtTerminateProcess with call stack spoofing
 pub fn nt_terminate_process(handle: HANDLE, exit_code: u32) -> bool {
-    if let Some(status) = syscall!(obfstr::obfstr!("NtTerminateProcess"), handle, exit_code) {
-        status >= 0
-    } else {
-        false
-    }
+    let status = match syscall!("NtTerminateProcess", handle, exit_code) {
+        Ok(s) => s as i32,
+        Err(_) => return false,
+    };
+    status >= 0
 }
 
-// NtClose  
+// NtClose with call stack spoofing
 pub fn nt_close(handle: HANDLE) -> bool {
-    if let Some(status) = syscall!(obfstr::obfstr!("NtClose"), handle) {
-        status >= 0
-    } else {
-        false
-    }
+    let status = match syscall!("NtClose", handle) {
+        Ok(s) => s as i32,
+        Err(_) => return false,
+    };
+    status >= 0
 }
 
-// NtOpenProcessToken
+// NtOpenProcessToken with call stack spoofing
 pub fn nt_open_process_token(process_handle: HANDLE, desired_access: u32) -> Option<HANDLE> {
     let mut token_handle: HANDLE = null_mut();
     
@@ -82,8 +85,8 @@ pub fn nt_open_process_token(process_handle: HANDLE, desired_access: u32) -> Opt
         "NtOpenProcessToken",
         process_handle,
         desired_access,
-        &mut token_handle
-    )?;
+        token_handle.as_ptr_mut()
+    ).ok()? as i32;
     
     if status >= 0 {
         Some(token_handle)
@@ -109,9 +112,6 @@ pub mod token_access {
     pub const TOKEN_QUERY: u32 = 0x0008;
     pub const TOKEN_ADJUST_PRIVILEGES: u32 = 0x0020;
 }
-
-// NtQuerySystemInformation
-// Process enumeration without handles
 
 // UNICODE_STRING structure
 #[repr(C)]
@@ -146,17 +146,14 @@ pub struct SystemProcessInformation {
     pub page_fault_count: u32,
     pub peak_working_set_size: usize,
     pub working_set_size: usize,
-    // i think theres more but we dont need them
 }
 
 const SYSTEM_PROCESS_INFORMATION_CLASS: u32 = 5;
 
-// NtQuerySystemInformation
-// will NOT open process handles, avoiding LSASS detection
+// NtQuerySystemInformation with call stack spoofing
 pub fn get_process_list() -> Vec<(u32, String)> {
     let mut processes = Vec::new();
     
-    // Start with 256KB buffer, grow if needed
     let mut buffer_size: u32 = 256 * 1024;
     let mut buffer: Vec<u8>;
     
@@ -164,26 +161,34 @@ pub fn get_process_list() -> Vec<(u32, String)> {
         buffer = vec![0u8; buffer_size as usize];
         let mut return_length: u32 = 0;
         
-        let status = syscall!(
-            obfstr::obfstr!("NtQuerySystemInformation"),
+        let status = match syscall!(
+            "NtQuerySystemInformation",
             SYSTEM_PROCESS_INFORMATION_CLASS,
             buffer.as_mut_ptr() as *mut c_void,
             buffer_size,
-            &mut return_length
-        );
+            return_length.as_ptr_mut()
+        ) {
+            Ok(s) => s as i32,
+            Err(_) => return processes,
+        };
         
-        match status {
-            Some(s) if s >= 0 => break,
-            Some(s) if s == -0x3FFFFFFC => {  // STATUS_INFO_LENGTH_MISMATCH (0xC0000004)
-                buffer_size = return_length + 0x10000;
-                continue;
-            }
-            _ => return processes,
+        if status >= 0 {
+            break;
+        } else if status == -0x3FFFFFFC {
+            buffer_size = return_length + 0x10000;
+            continue;
+        } else {
+            return processes;
         }
     }
     
+    let struct_size = std::mem::size_of::<SystemProcessInformation>();
     let mut offset: usize = 0;
     loop {
+        if offset + struct_size > buffer.len() {
+            break;
+        }
+        
         let info = unsafe {
             &*(buffer.as_ptr().add(offset) as *const SystemProcessInformation)
         };
@@ -202,7 +207,12 @@ pub fn get_process_list() -> Vec<(u32, String)> {
         if info.next_entry_offset == 0 {
             break;
         }
-        offset += info.next_entry_offset as usize;
+        
+        let new_offset = offset + info.next_entry_offset as usize;
+        if new_offset <= offset || new_offset > buffer.len() {
+            break;
+        }
+        offset = new_offset;
     }
     
     processes
@@ -213,13 +223,12 @@ pub struct ProcessDetails {
     pub pid: u32,
     pub name: String,
     pub parent_pid: u32,
-    pub memory_usage: u64, // working_set_private_size
-    pub start_time: u64,   // create_time (Windows FILETIME format)
+    pub memory_usage: u64,
+    pub start_time: u64,
     pub user_time: u64,
     pub kernel_time: u64,
 }
 
-// NtQuerySystemInformation
 pub fn get_detailed_process_list() -> Vec<ProcessDetails> {
     let mut processes = Vec::new();    
     let mut buffer_size: u32 = 256 * 1024;
@@ -229,26 +238,34 @@ pub fn get_detailed_process_list() -> Vec<ProcessDetails> {
         buffer = vec![0u8; buffer_size as usize];
         let mut return_length: u32 = 0;
         
-        let status = syscall!(
-            obfstr::obfstr!("NtQuerySystemInformation"),
+        let status = match syscall!(
+            "NtQuerySystemInformation",
             SYSTEM_PROCESS_INFORMATION_CLASS,
             buffer.as_mut_ptr() as *mut c_void,
             buffer_size,
-            &mut return_length
-        );
+            return_length.as_ptr_mut()
+        ) {
+            Ok(s) => s as i32,
+            Err(_) => return processes,
+        };
         
-        match status {
-            Some(s) if s >= 0 => break,
-            Some(s) if s == -0x3FFFFFFC => { 
-                buffer_size = return_length + 0x10000;
-                continue;
-            }
-            _ => return processes,
+        if status >= 0 {
+            break;
+        } else if status == -0x3FFFFFFC { 
+            buffer_size = return_length + 0x10000;
+            continue;
+        } else {
+            return processes;
         }
     }
     
+    let struct_size = std::mem::size_of::<SystemProcessInformation>();
     let mut offset: usize = 0;
     loop {
+        if offset + struct_size > buffer.len() {
+            break;
+        }
+        
         let info = unsafe {
             &*(buffer.as_ptr().add(offset) as *const SystemProcessInformation)
         };
@@ -277,12 +294,16 @@ pub fn get_detailed_process_list() -> Vec<ProcessDetails> {
         if info.next_entry_offset == 0 {
             break;
         }
-        offset += info.next_entry_offset as usize;
+        
+        let new_offset = offset + info.next_entry_offset as usize;
+        if new_offset <= offset || new_offset > buffer.len() {
+            break;
+        }
+        offset = new_offset;
     }
     
     processes
 }
-
 
 pub fn get_filtered_process_names() -> Vec<String> {
     get_process_list()

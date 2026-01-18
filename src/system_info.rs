@@ -1,13 +1,15 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use sysinfo::{CpuExt, DiskExt, System, SystemExt, ProcessExt, PidExt};
+use std::sync::OnceLock;
+use sysinfo::{System, Disks};
 
-const PROJECT_FOOTER: &str = "-# Kurinium: https://github.com/Mikasuru/Kurinium";
+const PROJECT_FOOTER: &str = "-# Kurinium: <https://github.com/Mikasuru/Kurinium>";
+static REMOTE_DESKTOP_APPS: OnceLock<Vec<(String, &'static str)>> = OnceLock::new();
 
-// Remote Desktop Applications to detect
-fn get_remote_desktop_apps() -> Vec<(String, &'static str)> {
-    vec![
+// remote desktop apps to detect (cached on first call)
+fn get_remote_desktop_apps() -> &'static [(String, &'static str)] {
+    REMOTE_DESKTOP_APPS.get_or_init(|| vec![
         // Remote Access Tools
         (obfstr::obfstr!("anydesk.exe").to_string(), "AnyDesk"),
         (obfstr::obfstr!("teamviewer.exe").to_string(), "TeamViewer"),
@@ -56,7 +58,7 @@ fn get_remote_desktop_apps() -> Vec<(String, &'static str)> {
         (obfstr::obfstr!("zerotier-one.exe").to_string(), "ZeroTier"),
         (obfstr::obfstr!("hamachi-2.exe").to_string(), "Hamachi"),
         (obfstr::obfstr!("hamachi-2-ui.exe").to_string(), "Hamachi UI"),
-    ]
+    ])
 }
 
 
@@ -70,18 +72,10 @@ fn format_uptime(seconds: u64) -> String {
     let seconds = remaining % 60;
 
     let mut parts = Vec::new();
-    if days > 0 {
-        parts.push(format!("{}d", days));
-    }
-    if hours > 0 {
-        parts.push(format!("{}h", hours));
-    }
-    if minutes > 0 {
-        parts.push(format!("{}m", minutes));
-    }
-    if seconds > 0 || parts.is_empty() {
-        parts.push(format!("{}s", seconds));
-    }
+    if days    > 0 { parts.push(format!("{}d", days)); }
+    if hours   > 0 { parts.push(format!("{}h", hours)); }
+    if minutes > 0 { parts.push(format!("{}m", minutes)); }
+    if seconds > 0 || parts.is_empty() { parts.push(format!("{}s", seconds)); }
 
     parts.join(" ")
 }
@@ -153,7 +147,6 @@ fn windows_version_display() -> Option<String> {
     }
 }
 
-// Remote Desktop Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConnection {
     pub name: String,
@@ -170,7 +163,7 @@ pub fn detect_remote_connections() -> Vec<RemoteConnection> {
     for (pid, name) in processes {
         let proc_name = name.to_lowercase();
         for (exe_name, display_name) in get_remote_desktop_apps() {
-            if proc_name == exe_name {
+            if proc_name == *exe_name {
                 connections.push(RemoteConnection {
                     name: name.clone(),
                     display_name: display_name.to_string(),
@@ -205,7 +198,7 @@ fn check_rdp_session() -> Option<String> {
     
     let output = Command::new("query")
         .args(["session"])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .creation_flags(0x08000000)
         .output()
         .ok()?;
 
@@ -218,9 +211,8 @@ fn check_rdp_session() -> Option<String> {
         }
     }
 
-    if rdp_sessions.is_empty() {
-        None
-    } else {
+    if rdp_sessions.is_empty() { None }
+    else {
         Some(rdp_sessions.join("\n"))
     }
 }
@@ -259,9 +251,8 @@ impl SystemInfo {
 
         let os = match windows_version_display() {
             Some(details) => details,
-            None => sys
-                .long_os_version()
-                .or_else(|| sys.os_version())
+            None => System::long_os_version()
+                .or_else(|| System::os_version())
                 .unwrap_or_else(|| std::env::consts::OS.to_string()),
         };
 
@@ -269,19 +260,17 @@ impl SystemInfo {
 
         let raw_total_memory = sys.total_memory();
         let raw_used_memory = sys.used_memory();
-        let memory_multiplier = if raw_total_memory > (1u64 << 32) {
-            1
-        } else {
-            1024
-        };
+        let memory_multiplier = if raw_total_memory > (1u64 << 32) { 1 }
+        else { 1024 };
         let total_memory = raw_total_memory.saturating_mul(memory_multiplier);
         let used_memory = raw_used_memory.saturating_mul(memory_multiplier);
 
         let cpu_cores = sys.physical_core_count().unwrap_or(sys.cpus().len());
 
+        let disks = Disks::new_with_refreshed_list();
         let mut total_disk: u64 = 0;
         let mut used_disk: u64 = 0;
-        for disk in sys.disks() {
+        for disk in disks.iter() {
             total_disk = total_disk.saturating_add(disk.total_space());
             used_disk =
                 used_disk.saturating_add(disk.total_space().saturating_sub(disk.available_space()));
@@ -291,13 +280,15 @@ impl SystemInfo {
             os,
             kernel: std::env::consts::ARCH.to_string(),
             hostname,
-            cpu_name: sys.global_cpu_info().name().to_string(),
+            cpu_name: sys.cpus().first()
+                .map(|c| c.brand().to_string())
+                .unwrap_or_else(|| "Unknown".to_string()),
             cpu_cores,
             memory_total: total_memory,
             memory_used: used_memory,
             disk_total: total_disk,
             disk_used: used_disk,
-            uptime: sys.uptime(),
+            uptime: System::uptime(),
         })
     }
 
@@ -454,7 +445,6 @@ impl DeviceInfo {
         Ok("unknown-device".to_string())
     }
 
-    // Use shared admin check from utils
     fn is_admin() -> bool {
         crate::utils::admin::is_admin()
     }

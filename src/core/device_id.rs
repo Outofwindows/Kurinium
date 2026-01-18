@@ -7,7 +7,6 @@ use std::process::Command;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct DeviceId;
-
 impl DeviceId {
     pub fn get_device_channel_name() -> Result<String> {
         let username = Self::get_username()?;
@@ -51,21 +50,18 @@ impl DeviceId {
     #[cfg(windows)]
     fn get_windows_hardware_id() -> Result<String> {
         if let Ok(cpu_id) = Self::run_wmi_query("SELECT ProcessorId FROM Win32_Processor") {
-            // CPU
             if !cpu_id.trim().is_empty() {
                 return Ok(cpu_id);
             }
         }
 
         if let Ok(mb_serial) = Self::run_wmi_query("SELECT SerialNumber FROM Win32_BaseBoard") {
-            // Motherboard
             if !mb_serial.trim().is_empty() {
                 return Ok(mb_serial);
             }
         }
 
         if let Ok(bios_serial) = Self::run_wmi_query("SELECT SerialNumber FROM Win32_BIOS") {
-            // BIOS
             if !bios_serial.trim().is_empty() {
                 return Ok(bios_serial);
             }

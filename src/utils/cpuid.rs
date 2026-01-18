@@ -50,6 +50,10 @@ impl From<u8> for TopologyLevel {
 }
 
 impl CpuId {
+    pub fn new() -> Self {
+        Self::get()
+    }
+
     pub fn get() -> Self {
         let (cores, threads) = Self::get_topology();
         
@@ -60,6 +64,38 @@ impl CpuId {
             threads,
             features: Self::get_features(),
         }
+    }
+
+    pub fn is_hypervisor_present(&self) -> bool {
+        self.features.hypervisor
+    }
+
+    pub fn get_hypervisor_vendor(&self) -> Option<String> {
+        let (ebx, ecx, edx): (u32, u32, u32);
+
+        unsafe {
+            asm!(
+                "push rbx",
+                "cpuid",
+                "mov {ebx_out:e}, ebx",
+                "pop rbx",
+                ebx_out = out(reg) ebx,
+                inout("eax") 0x40000000u32 => _,
+                out("ecx") ecx,
+                out("edx") edx,
+            );
+        }
+
+        if ebx == 0 && ecx == 0 && edx == 0 {
+            return None;
+        }
+
+        let mut bytes = [0u8; 12];
+        bytes[0..4].copy_from_slice(&ebx.to_le_bytes());
+        bytes[4..8].copy_from_slice(&ecx.to_le_bytes());
+        bytes[8..12].copy_from_slice(&edx.to_le_bytes());
+
+        Some(String::from_utf8_lossy(&bytes).trim_matches(char::from(0)).to_string())
     }
 
     pub fn get_vendor() -> String {

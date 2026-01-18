@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sysinfo::{System, SystemExt};
+use sysinfo::System;
 use crate::utils::syscall::{self, access};
 
 #[derive(Debug, Clone)]
@@ -22,13 +22,13 @@ impl ProcessManager {
     pub fn new() -> Self {
         let mut system = System::new();
         system.refresh_memory();
-        system.refresh_cpu();
+        system.refresh_cpu_all();
         Self { system }
     }
 
     pub fn refresh(&mut self) {
         self.system.refresh_memory();
-        self.system.refresh_cpu();
+        self.system.refresh_cpu_all();
     }
 
     pub fn list_processes(&mut self) -> Vec<ProcessInfo> {
@@ -95,7 +95,7 @@ pub struct SystemInfo {
 }
 
 pub fn format_memory_size(bytes: u64) -> String {
-    crate::utils::formatting::format_memory_size(bytes)
+ crate::utils::formatting::format_memory_size(bytes)
 }
 
 pub fn format_cpu_usage(usage: f32) -> String {

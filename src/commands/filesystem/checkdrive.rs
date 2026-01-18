@@ -1,155 +1,55 @@
-use crate::commands::*;
-use anyhow::Result;
-use async_trait::async_trait;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
+use crate::prelude::*;
+use sysinfo::Disks;
 
-#[cfg(windows)]
-use winapi::um::fileapi::{GetDiskFreeSpaceExW, GetDriveTypeW};
-#[cfg(windows)]
-use winapi::um::winbase::{
-    DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR, DRIVE_REMOVABLE, DRIVE_FIXED, 
-    DRIVE_REMOTE, DRIVE_CDROM, DRIVE_RAMDISK,
-};
+#[poise::command(prefix_command, aliases("drives", "disks"))]
+pub async fn checkdrive(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    let disks = Disks::new_with_refreshed_list();
 
-pub struct CheckDriveCommand;
+    let mut fields = Vec::new();
 
-#[async_trait]
-impl BotCommand for CheckDriveCommand {
-    fn name(&self) -> &str { "checkdrive" }
-    fn description(&self) -> &str { "List all available drives on the system" }
-    fn category(&self) -> &str { "filesystem" }
-    fn usage(&self) -> &str { ".checkdrive" }
-    fn examples(&self) -> &'static [&'static str] { &[".checkdrive"] }
-    fn aliases(&self) -> &'static [&'static str] { &["drives", "listdrives"] }
+    for disk in disks.iter() {
+        let total = disk.total_space();
+        let available = disk.available_space();
+        let used = total - available;
+        let usage_pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, _args: Arguments) -> Result<()> {
-        let drives = Self::get_drives_info()?;
+        let filled = (usage_pct / 10.0).round() as usize;
+        let empty = 10 - filled;
+        let bar = format!("{}{}",
+            "█".repeat(filled),
+            "░".repeat(empty)
+        );
 
-        if drives.is_empty() {
-            http.create_message(msg.channel_id)
-                .content("ERROR: No drives found.")
-                .await?;
-            return Ok(());
-        }
+        let info = format!(
+            "{} **{:.1}%**\n`{:.1} GB` / `{:.1} GB` free: `{:.1} GB`",
+            bar,
+            usage_pct,
+            used as f64 / (1024.0 * 1024.0 * 1024.0),
+            total as f64 / (1024.0 * 1024.0 * 1024.0),
+            available as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
 
-        let mut output = String::from("**Available Drives:**\n\n");
-
-        for drive in drives {
-            output.push_str(&format!(
-                "**{}** - {}\n├ **Total:** {}\n├ **Used:** {}\n└ **Free:** {}\n\n",
-                drive.letter,
-                drive.drive_type,
-                Self::format_bytes(drive.total_space),
-                Self::format_bytes(drive.used_space),
-                Self::format_bytes(drive.free_space)
-            ));
-        }
-
-        if output.len() > 1900 {
-            let truncated = &output[..1900];
-            http.create_message(msg.channel_id)
-                .content(&format!("{}\n\n*(truncated)*", truncated))
-                .await?;
-        } else {
-            http.create_message(msg.channel_id)
-                .content(&output)
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct DriveInfo {
-    letter: String,
-    drive_type: String,
-    total_space: u64,
-    free_space: u64,
-    used_space: u64,
-}
-
-impl CheckDriveCommand {
-    #[cfg(windows)]
-    fn get_drives_info() -> Result<Vec<DriveInfo>> {
-        let mut drives = Vec::new();
-
-        for letter in b'A'..=b'Z' {
-            let drive_letter = format!("{}:\\", letter as char);
-            let drive_path: Vec<u16> = OsStr::new(&drive_letter)
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect();
-
-            unsafe {
-                let drive_type = GetDriveTypeW(drive_path.as_ptr());
-
-                if drive_type == DRIVE_UNKNOWN || drive_type == DRIVE_NO_ROOT_DIR {
-                    continue;
-                }
-
-                let type_str = match drive_type {
-                    DRIVE_REMOVABLE => "Removable",
-                    DRIVE_FIXED => "Fixed",
-                    DRIVE_REMOTE => "Network",
-                    DRIVE_CDROM => "CD-ROM",
-                    DRIVE_RAMDISK => "RAM Disk",
-                    _ => "Unknown",
-                };
-
-                let mut free_bytes: u64 = 0;
-                let mut total_bytes: u64 = 0;
-                let mut _available_bytes: u64 = 0;
-
-                let result = GetDiskFreeSpaceExW(
-                    drive_path.as_ptr(),
-                    &mut _available_bytes as *mut u64 as *mut _,
-                    &mut total_bytes as *mut u64 as *mut _,
-                    &mut free_bytes as *mut u64 as *mut _,
-                );
-
-                if result != 0 {
-                    let used_bytes = total_bytes.saturating_sub(free_bytes);
-                    drives.push(DriveInfo {
-                        letter: format!("{}:", letter as char),
-                        drive_type: type_str.to_string(),
-                        total_space: total_bytes,
-                        free_space: free_bytes,
-                        used_space: used_bytes,
-                    });
-                }
-            }
-        }
-
-        Ok(drives)
+        fields.push((
+            format!("💾 {} ({})", 
+                disk.mount_point().display(),
+                disk.file_system().to_string_lossy()
+            ),
+            info,
+            false
+        ));
     }
 
-    #[cfg(not(windows))]
-    fn get_drives_info() -> Result<Vec<DriveInfo>> {
-        Err(anyhow::anyhow!(
-            "Drive listing is only supported on Windows"
-        ))
+    if fields.is_empty() {
+        ctx.say("*No drives detected*").await?;
+        return Ok(());
     }
 
-    fn format_bytes(bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
-        const TB: u64 = GB * 1024;
+    let embed = serenity::CreateEmbed::new()
+        .title("Disk Usage")
+        .fields(fields)
+        .color(0x9b59b6);
 
-        if bytes >= TB {
-            format!("{:.2} TB", bytes as f64 / TB as f64)
-        } else if bytes >= GB {
-            format!("{:.2} GB", bytes as f64 / GB as f64)
-        } else if bytes >= MB {
-            format!("{:.2} MB", bytes as f64 / MB as f64)
-        } else if bytes >= KB {
-            format!("{:.2} KB", bytes as f64 / KB as f64)
-        } else {
-            format!("{} B", bytes)
-        }
-    }
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+
+    Ok(())
 }

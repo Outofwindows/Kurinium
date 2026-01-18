@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::OnceLock;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
+use crate::prelude::*;
+use crate::error::KuriniumError;
 
 #[derive(Debug)]
 pub struct AuthManager {
@@ -13,65 +13,34 @@ impl AuthManager {
         Self { config }
     }
 
-    pub async fn is_authorized(&self, http: &HttpClient, message: &Message) -> Result<bool> {
+    pub async fn is_authorized_poise(&self, ctx: PoiseContext<'_>) -> Result<bool> {
         if self.config.auth_all {
             return Ok(true);
         }
-        if self.config.auth_roles {
-            if self.has_allowed_role(http, message).await? {
-                return Ok(true);
-            }
-        }
+
+        let author_id = ctx.author().id.to_string();
+
         if self.config.auth_user {
-            if self.is_allowed_user(message).await? {
+            if self.config.allowed_users.contains(&author_id) {
                 return Ok(true);
             }
         }
-        Ok(false)
-    }
 
-    async fn has_allowed_role(&self, http: &HttpClient, message: &Message) -> Result<bool> {
-        let member_response = match http
-            .guild_member(message.guild_id.unwrap(), message.author.id)
-            .await
-        {
-            Ok(member) => member,
-            Err(_) => return Ok(false),
-        };
-        let member =
-            member_response
-                .model()
-                .await
-                .unwrap_or_else(|_| twilight_model::guild::Member {
-                    avatar: None,
-                    communication_disabled_until: None,
-                    deaf: false,
-                    flags: twilight_model::guild::MemberFlags::empty(),
-                    joined_at: None,
-                    mute: false,
-                    nick: None,
-                    pending: false,
-                    premium_since: None,
-                    roles: Vec::new(),
-                    user: message.author.clone(),
-                });
-
-        for role_id in &member.roles {
-            let role_str = role_id.to_string();
-            if self.config.allowed_roles.contains(&role_str) {
-                return Ok(true);
+        if self.config.auth_roles {
+            if let Some(member) = ctx.author_member().await {
+                for role_id in &member.roles {
+                    let role_str = role_id.to_string();
+                    if self.config.allowed_roles.contains(&role_str) {
+                        return Ok(true);
+                    }
+                }
             }
         }
 
         Ok(false)
     }
 
-    async fn is_allowed_user(&self, message: &Message) -> Result<bool> {
-        let user_id = message.author.id.to_string();
-        Ok(self.config.allowed_users.contains(&user_id))
-    }
-
-    pub async fn get_auth_status(&self, http: &HttpClient, message: &Message) -> String {
+    pub async fn get_auth_status_poise(&self, ctx: PoiseContext<'_>) -> String {
         if self.config.auth_all {
             return "**Authentication**: Disabled (everyone allowed)".to_string();
         }
@@ -94,7 +63,7 @@ impl AuthManager {
             ));
         }
 
-        if let Ok(authorized) = self.is_authorized(http, message).await {
+        if let Ok(authorized) = self.is_authorized_poise(ctx).await {
             if authorized {
                 status.push_str("**Your status**: Authorized");
             } else {
@@ -111,25 +80,19 @@ impl AuthManager {
 }
 
 static AUTH_MANAGER: OnceLock<AuthManager> = OnceLock::new();
-
-pub fn get_auth_manager() -> &'static AuthManager {
-    AUTH_MANAGER.get().expect("Auth manager not initialized")
+pub fn get_auth_manager() -> Result<&'static AuthManager, KuriniumError> {
+    AUTH_MANAGER.get().ok_or(KuriniumError::AuthNotInitialized)
 }
-
-pub fn init_auth_manager(config: crate::config::AuthConfig) {
+pub fn get_auth_manager_unchecked() -> &'static AuthManager {
+    AUTH_MANAGER
+        .get()
+        .expect("FATAL: Auth manager accessed before initialization - this is a bug")
+}
+pub fn init_auth_manager(config: crate::config::AuthConfig) -> Result<(), KuriniumError> {
     AUTH_MANAGER
         .set(AuthManager::new(config))
-        .expect("Auth manager already initialized");
+        .map_err(|_| KuriniumError::AuthAlreadyInitialized)
 }
-
-pub async fn require_auth(http: &HttpClient, message: &Message) -> Result<()> {
-    let auth_manager = get_auth_manager();
-
-    if !auth_manager.is_authorized(http, message).await? {
-        return Err(anyhow::anyhow!(
-            "**Unauthorized**: You don't have permission to use this bot"
-        ));
-    }
-
-    Ok(())
+pub fn try_init_auth_manager(config: crate::config::AuthConfig) {
+    let _ = AUTH_MANAGER.set(AuthManager::new(config));
 }

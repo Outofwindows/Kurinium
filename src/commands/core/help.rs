@@ -1,113 +1,64 @@
-use crate::command_registry::get_registry;
-use crate::commands::*;
-use anyhow::Result;
-use async_trait::async_trait;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
+use crate::prelude::*;
+use crate::config::Config;
 
-pub struct HelpCommand;
-
-#[async_trait]
-impl BotCommand for HelpCommand {
-    fn name(&self) -> &str { "help" }
-    fn description(&self) -> &str { "Show help information for commands" }
-    fn category(&self) -> &str { "core" }
-    fn usage(&self) -> &str { ".help [command_name]" }
-    fn examples(&self) -> &'static [&'static str] { &[".help", ".help ping", ".help upload"] }
-    fn aliases(&self) -> &'static [&'static str] { &["h", "commands"] }
-
-    async fn execute(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        mut args: Arguments,
-    ) -> Result<()> {
-        if args.is_empty() {
-            self.show_all_commands(http, msg).await?;
-        } else {
-            let command_name = args.next().unwrap_or("");
-            self.show_command_help(http, msg, command_name).await?;
-        }
-
-        Ok(())
-    }
-}
-
-impl HelpCommand {
-    async fn show_all_commands(&self, http: &Arc<HttpClient>, msg: &Message) -> Result<()> {
-        let registry = get_registry();
-        let categories = registry.get_categories();
-
-        let mut messages: Vec<String> = Vec::new();
-        let mut current_msg = String::from("```\n=== COMMAND LIST ===\n\n");
-
-        for category in categories {
-            let commands = registry.get_commands_by_category(&category);
-            if !commands.is_empty() {
-                let mut cat_section = format!("[{}]\n", category.to_uppercase());
-                
-                for cmd in commands {
-                    cat_section.push_str(&format!(".{:<12} {}\n", cmd.name, cmd.description));
-                }
-                cat_section.push('\n');
-
-                if current_msg.len() + cat_section.len() + 10 > 1900 {
-                    current_msg.push_str("```");
-                    messages.push(current_msg);
-                    current_msg = format!("```\n{}", cat_section);
-                } else {
-                    current_msg.push_str(&cat_section);
-                }
-            }
-        }
-
-        current_msg.push_str("Use .help <cmd> for details\n```");
-        messages.push(current_msg);
-
-        for content in messages {
-            http.create_message(msg.channel_id)
-                .content(&content)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    async fn show_command_help(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        command_name: &str,
-    ) -> Result<()> {
-        let registry = get_registry();
-        if let Some(metadata) = registry.get_metadata(command_name) {
-            let aliases = if metadata.aliases.is_empty() {
+#[poise::command(prefix_command, aliases("h", "commands"))]
+pub async fn help(
+    ctx: PoiseContext<'_>,
+    #[description = "Specific command to show help about"]
+    #[rest]
+    command: Option<String>,
+) -> Result<(), Error> {
+    let prefix = Config::BOT_PREFIX;
+    
+    if let Some(cmd_name) = command {
+        let cmd_name = cmd_name.trim();
+        
+        let commands = &ctx.framework().options().commands;
+        if let Some(cmd) = commands.iter().find(|c| c.name == cmd_name) {
+            let aliases = if cmd.aliases.is_empty() {
                 "None".to_string()
             } else {
-                metadata.aliases.join(", ")
+                cmd.aliases.join(", ")
             };
-
-            let examples = metadata.examples.join("\n  ");
-
-            let output = format!(
-                "```\n=== {} ===\n\n{}\n\nUsage: {}\nCategory: {}\nAliases: {}\n\nExamples:\n  {}\n```",
-                metadata.name.to_uppercase(),
-                metadata.description,
-                metadata.usage,
-                metadata.category,
-                aliases,
-                examples
-            );
-
-            http.create_message(msg.channel_id)
-                .content(&output)
-                .await?;
+            
+            let description = cmd.description.as_deref().unwrap_or("No description");
+            
+            let embed = serenity::CreateEmbed::new()
+                .title(format!("Command: {}", cmd.name.to_uppercase()))
+                .color(0x00FF00)
+                .description(format!(
+                    "**Description**\n{}\n\n**Usage**\n`{}{}`\n\n**Aliases**\n`{}`",
+                    description, prefix, cmd.name, aliases
+                ))
+                .footer(serenity::CreateEmbedFooter::new("Kurinium Bot"));
+                
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
         } else {
-            http.create_message(msg.channel_id)
-                .content(&format!("Command '{}' not found. Use .help to see all.", command_name))
-                .await?;
+            ctx.say(format!("Command '{}' not found.", cmd_name)).await?;
         }
+    } else {
+        let commands = &ctx.framework().options().commands;
 
-        Ok(())
+        let mut description = String::new();
+        description.push_str(&format!("**Prefix:** `{}`\n\n", prefix));
+        description.push_str("**Available Commands**\n");
+        
+        for cmd in commands.iter() {
+            let line = format!("`{}` - {}\n", cmd.name, cmd.description.as_deref().unwrap_or("-"));
+            description.push_str(&line);
+        }
+        
+        description.push_str(&format!("\nType `{}help <command>` for details.", prefix));
+
+        let embed = serenity::CreateEmbed::new()
+            .title("Kurinium Help")
+            .color(0x0099FF)
+            .description(description)
+            .footer(serenity::CreateEmbedFooter::new(format!("Total Commands: {}", commands.len())))
+            .timestamp(serenity::Timestamp::now());
+
+        ctx.send(poise::CreateReply::default().embed(embed)).await?;
     }
+
+    Ok(())
 }

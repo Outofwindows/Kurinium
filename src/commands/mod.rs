@@ -1,8 +1,3 @@
-use async_trait::async_trait;
-use std::sync::Arc;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
-
 pub mod core;
 pub mod crypto;
 pub mod filesystem;
@@ -10,7 +5,7 @@ pub mod system;
 pub mod utility;
 pub mod network;
 
-// Simple command parser for Twilight
+use crate::prelude::*;
 pub struct Arguments {
     args: Vec<String>,
     current: usize,
@@ -19,6 +14,10 @@ pub struct Arguments {
 impl Arguments {
     pub fn new(input: &str) -> Self {
         let args = input.split_whitespace().map(|s| s.to_string()).collect();
+        Self { args, current: 0 }
+    }
+
+    pub fn from_vec(args: Vec<String>) -> Self {
         Self { args, current: 0 }
     }
 
@@ -42,6 +41,10 @@ impl Arguments {
 
     pub fn is_empty(&self) -> bool {
         self.args.is_empty() || self.current >= self.args.len()
+    }
+
+    pub fn all(&self) -> &[String] {
+        &self.args
     }
 
     pub fn parse_quoted_args(input: &str) -> Vec<String> {
@@ -75,18 +78,24 @@ impl Arguments {
     }
 }
 
-#[async_trait]
-pub trait BotCommand: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn category(&self) -> &str;
-    fn usage(&self) -> &str;
-    fn examples(&self) -> &'static [&'static str];
-    fn aliases(&self) -> &'static [&'static str];
-    async fn execute(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        args: Arguments,
-    ) -> anyhow::Result<()>;
+pub async fn send_message(ctx: PoiseContext<'_>, content: &str) -> Result<(), Error> {
+    ctx.say(content).await?;
+    Ok(())
+}
+
+pub async fn send_embed(
+    ctx: PoiseContext<'_>,
+    title: &str,
+    description: &str,
+    color: u32,
+) -> Result<(), Error> {
+    ctx.send(
+        poise::CreateReply::default().embed(
+            serenity::CreateEmbed::new()
+                .title(title)
+                .description(description)
+                .color(color)
+        )
+    ).await?;
+    Ok(())
 }

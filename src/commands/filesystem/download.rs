@@ -1,113 +1,94 @@
-use crate::commands::*;
-use anyhow::Result;
-use async_trait::async_trait;
-use reqwest;
-use std::fs;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
+use crate::prelude::*;
+use std::path::Path;
 
-pub struct DownloadCommand;
-
-#[async_trait]
-impl BotCommand for DownloadCommand {
-    fn name(&self) -> &str { "download" }
-    fn description(&self) -> &str { "Download a file from a URL" }
-    fn category(&self) -> &str { "filesystem" }
-    fn usage(&self) -> &str { ".download <url> [save_path]" }
-    fn examples(&self) -> &'static [&'static str] { &[".download https://github.com/Mikasuru/Kurinium/text.txt"] }
-    fn aliases(&self) -> &'static [&'static str] { &["dl"] }
-
-    async fn execute(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        mut args: Arguments,
-    ) -> Result<()> {
-        let url = args.next().unwrap_or("").to_string();
-        let save_path_owned = args.rest();
-        let save_path = save_path_owned.trim();
-
-        if url.is_empty() {
-            http.create_message(msg.channel_id)
-                .content("ERROR: Please provide a URL. Usage: `.download <url> [save_path]`")
-                .await?;
-            return Ok(());
-        }
-
-        // Validate URL
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            http.create_message(msg.channel_id)
-                .content(&format!(
-                    "ERROR: Invalid URL format: `{}`. URL must start with http:// or https://",
-                    url
-                ))
-                .await?;
-            return Ok(());
-        }
-
-        let filename = if save_path.is_empty() {
-            url.split('/')
-                .last()
-                .unwrap_or("downloaded_file")
-                .to_string()
+#[poise::command(prefix_command, aliases("dl"))]
+pub async fn download(
+    ctx: PoiseContext<'_>,
+    #[description = "URL to download (or attach file)"]
+    #[rest]
+    args: Option<String>,
+) -> Result<(), Error> {
+    let (url, target_path) = if let poise::Context::Prefix(p_ctx) = ctx {
+        if let Some(att) = p_ctx.msg.attachments.first() {
+            let args = args.unwrap_or_default();
+            let save_path = if args.trim().is_empty() {
+                att.filename.clone()
+            } else { args.trim().to_string() };
+            (att.url.clone(), save_path)
         } else {
-            save_path.to_string()
-        };
-
-        // Send starting message
-        let response_msg = http
-            .create_message(msg.channel_id)
-            .content(&format!("Downloading file from `{}`...", url))
-            .await?;
-        let response_message = response_msg.model().await?;
-
-        // Download the file
-        let client = reqwest::Client::builder()
-            .user_agent("Kurinium-Bot/1.0")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-
-        match client.get(url).send().await {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    http.update_message(msg.channel_id, response_message.id)
-                        .content(Some(&format!(
-                            "ERROR: Failed to download file. Server returned status: {}",
-                            resp.status()
-                        )))
-                        .await?;
+            let args = args.unwrap_or_default();
+            let mut parts = args.split_whitespace();
+            let url = match parts.next() {
+                Some(u) => u.to_string(),
+                None => {
+                    ctx.say("Usage: `.download <url> [path]` or attach a file").await?;
                     return Ok(());
                 }
+            };
+            let path = parts.collect::<Vec<_>>().join(" ");
+            let filename = url.split('/').last().unwrap_or("download");
+            let target = if path.is_empty() { filename.to_string() } else { path };
+            (url, target)
+        }
+    } else {
+        ctx.say("Usage: `.download <url> [path]` or attach a file").await?;
+        return Ok(());
+    };
 
-                let bytes = resp.bytes().await?;
-                let file_size = bytes.len();
+    let filename = Path::new(&target_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
 
-                // Save the file
-                match fs::write(&filename, &bytes) {
-                    Ok(_) => {
-                        let file_size_mb = file_size as f64 / 1024.0 / 1024.0;
+    let reply = ctx.say(format!("Downloading `{}`...", filename)).await?;
 
-                        http.update_message(msg.channel_id, response_message.id)
-                            .content(Some(&format!("SUCCESS: **File downloaded successfully!**\n**Filename:** `{}`\n**Size:** {:.2} MB", filename, file_size_mb)))
-                            .await?;
+    let client = reqwest::Client::new();
+    match client.get(&url).send().await {
+        Ok(response) => {
+            if !response.status().is_success() {
+                reply.edit(ctx, poise::CreateReply::default()
+                    .content(format!("ERROR: Server returned {}", response.status()))).await?;
+                return Ok(());
+            }
+            
+            let _content_length = response.content_length();
+            
+            match response.bytes().await {
+                Ok(bytes) => {
+                    let size = bytes.len();
+                    
+                    if let Err(e) = tokio::fs::write(&target_path, &bytes).await {
+                        reply.edit(ctx, poise::CreateReply::default()
+                            .content(format!("ERROR: Failed to save file: {}", e))).await?;
+                        return Ok(());
                     }
-                    Err(e) => {
-                        http.update_message(msg.channel_id, response_message.id)
-                            .content(Some(&format!(
-                                "ERROR: Failed to save file `{}`: {}",
-                                filename, e
-                            )))
-                            .await?;
-                    }
+
+                    let size_str = if size >= 1024 * 1024 {
+                        format!("{:.2} MB", size as f64 / (1024.0 * 1024.0))
+                    } else if size >= 1024 { format!("{:.2} KB", size as f64 / 1024.0)
+                    } else { format!("{} bytes", size) };
+
+                    let embed = serenity::CreateEmbed::new()
+                        .title("Download Complete")
+                        .field("File", format!("`{}`", filename), true)
+                        .field("Size", size_str, true)
+                        .field("Saved to", format!("`{}`", target_path), false)
+                        .color(0x2ecc71);
+
+                    reply.edit(ctx, poise::CreateReply::default().content("").embed(embed)).await?;
+                }
+                Err(e) => {
+                    reply.edit(ctx, poise::CreateReply::default()
+                        .content(format!("ERROR: Failed to read response: {}", e))).await?;
                 }
             }
-            Err(e) => {
-                http.update_message(msg.channel_id, response_message.id)
-                    .content(Some(&format!("ERROR: Failed to download file: {}", e)))
-                    .await?;
-            }
         }
-
-        Ok(())
+        Err(e) => {
+            reply.edit(ctx, poise::CreateReply::default()
+                .content(format!("ERROR: Download failed: {}", e))).await?;
+        }
     }
+
+    Ok(())
 }

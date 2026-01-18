@@ -1,203 +1,170 @@
-use crate::commands::*;
-use crate::config::Config;
-use anyhow::Result;
-use async_trait::async_trait;
-use std::fs;
+use crate::prelude::*;
+use crate::utils::nullpointer;
+use crate::utils::formatting::format_bytes;
 use std::path::Path;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
 
-pub struct UploadCommand;
+const DISCORD_MAX_SIZE: u64 = 8 * 1024 * 1024;
 
-#[async_trait]
-impl BotCommand for UploadCommand {
-    fn name(&self) -> &str { "upload" }
-    fn description(&self) -> &str { "Upload a file to Discord or save Discord attachments to local filesystem" }
-    fn category(&self) -> &str { "filesystem" }
-    fn usage(&self) -> &str { ".upload <file_path> | .upload (with attachment) | .upload save <filename>" }
-    fn examples(&self) -> &'static [&'static str] { &[".upload kurinium.pdf", ".upload save kurinium_file.zip"] }
-    fn aliases(&self) -> &'static [&'static str] { &["up"] }
-
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, args: Arguments) -> Result<()> {
-        if !msg.attachments.is_empty() {
-            return self.handle_attachment_save(http, msg, args).await;
+#[poise::command(prefix_command, aliases("up"))]
+pub async fn upload(
+    ctx: PoiseContext<'_>,
+    #[description = "File path or 'save <filename>'"]
+    #[rest]
+    args: Option<String>,
+) -> Result<(), Error> {
+    if let poise::Context::Prefix(p_ctx) = ctx {
+        if !p_ctx.msg.attachments.is_empty() {
+            return handle_attachment_save(ctx, p_ctx.msg, args).await;
         }
+    }
 
-        let args_string = args.rest();
-        let mut parts = args_string.trim().split_whitespace();
-        let first_arg = parts.next().unwrap_or("");
-
-        if first_arg == "save" {
-            let filename = parts.collect::<Vec<_>>().join(" ");
-            if filename.is_empty() {
-                http.create_message(msg.channel_id)
-                    .content("ERROR: Please provide a filename. Usage: `.upload save <filename>`")
-                    .await?;
-                return Ok(());
-            }
-            return self.handle_attachment_download(http, msg, &filename).await;
-        }
-
-        if first_arg.is_empty() {
-            http.create_message(msg.channel_id)
-                .content("ERROR: Please provide a file path, attach a file, or use `.upload save <filename>`. Usage: `.upload <file_path>`")
-                .await?;
+    let args = match args {
+        Some(a) if !a.trim().is_empty() => a,
+        _ => {
+            ctx.say("**Usage:**\n\
+                - `.upload <file_path>` - Upload file to Discord/0x0.st\n\
+                - `.upload` (with attachment) - Save attachment locally\n\
+                - `.upload save <filename>` (with attachment) - Save with custom name").await?;
             return Ok(());
         }
+    };
 
-        let file_path = args_string.trim();
+    let args_trimmed = args.trim();
+    let mut parts = args_trimmed.split_whitespace();
+    let first_arg = parts.next().unwrap_or("");
 
-        self.handle_file_upload(http, msg, file_path).await
+    if first_arg.to_lowercase() == "save" {
+        ctx.say("ERROR: No attachment found.\nUsage: Attach a file and use `.upload save <filename>`").await?;
+        return Ok(());
     }
+
+    handle_file_upload(ctx, args_trimmed).await
 }
 
-impl UploadCommand {
-    async fn handle_attachment_save(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        args: Arguments,
-    ) -> Result<()> {
-        let attachment = &msg.attachments[0]; // Get first attachment
-        let filename_owned = args.rest();
-        let filename = filename_owned.trim();
+async fn handle_attachment_save(
+    ctx: PoiseContext<'_>,
+    msg: &serenity::Message,
+    args: Option<String>,
+) -> Result<(), Error> {
+    let attachment = &msg.attachments[0];
+    let args_str = args.unwrap_or_default();
+    let args_trimmed = args_str.trim();
 
-        let save_filename = if filename.is_empty() {
-            &attachment.filename
-        } else {
-            filename
-        };
+    let save_filename = if args_trimmed.is_empty() {
+        attachment.filename.clone()
+    } else if args_trimmed.to_lowercase().starts_with("save ") {
+        args_trimmed[5..].trim().to_string()
+    } else if args_trimmed.to_lowercase() == "save" {
+        attachment.filename.clone()
+    } else {
+        args_trimmed.to_string()
+    };
 
-        let response_msg = http
-            .create_message(msg.channel_id)
-            .content(&format!(
-                "Downloading attachment `{}` as `{}`...",
-                attachment.filename, save_filename
-            ))
-            .await?;
-        let response_message = response_msg.model().await?;
-
-        let client = reqwest::Client::new();
-        match client.get(&attachment.url).send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    let bytes = resp.bytes().await?;
-
-                    match fs::write(save_filename, &bytes) {
-                        Ok(_) => {
-                            let file_size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
-                            http.update_message(msg.channel_id, response_message.id)
-                                .content(Some(&format!("SUCCESS: **Attachment saved successfully!**\n**Filename:** `{}`\n**Size:** {:.2} MB", save_filename, file_size_mb)))
-                                .await?;
-                        }
-                        Err(e) => {
-                            http.update_message(msg.channel_id, response_message.id)
-                                .content(Some(&format!("ERROR: Failed to save attachment: {}", e)))
-                                .await?;
-                        }
-                    }
-                } else {
-                    http.update_message(msg.channel_id, response_message.id)
-                        .content(Some(&format!(
-                            "ERROR: Failed to download attachment. Status: {}",
-                            resp.status()
-                        )))
-                        .await?;
-                }
-            }
-            Err(e) => {
-                http.update_message(msg.channel_id, response_message.id)
-                    .content(Some(&format!(
-                        "ERROR: Failed to download attachment: {}",
-                        e
-                    )))
-                    .await?;
-            }
-        }
-
-        Ok(())
+    if save_filename.is_empty() {
+        ctx.say("ERROR: Please provide a filename.\nUsage: `.upload save <filename>`").await?;
+        return Ok(());
     }
 
-    async fn handle_attachment_download(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        _filename: &str,
-    ) -> Result<()> {
-        http.create_message(msg.channel_id)
-            .content("INFO: Attachment download from referenced messages not yet implemented.\nPlease attach a file directly to save it.\n-# Kurinium: <https://github.com/Mikasuru/Kurinium>")
-            .await?;
-        Ok(())
-    }
+    let reply = ctx.say(format!("Downloading `{}` as `{}`...", 
+        attachment.filename, save_filename)).await?;
 
-    // Handle uploading local files to Discord
-    async fn handle_file_upload(
-        &self,
-        http: &Arc<HttpClient>,
-        msg: &Message,
-        file_path: &str,
-    ) -> Result<()> {
-        let path = Path::new(file_path);
+    let client = reqwest::Client::new();
+    match client.get(&attachment.url).send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                reply.edit(ctx, poise::CreateReply::default()
+                    .content(format!("ERROR: Failed to download. Status: {}", resp.status()))).await?;
+                return Ok(());
+            }
+            let bytes = resp.bytes().await?;
+            let file_size = bytes.len();
 
-        if !path.exists() {
-            http.create_message(msg.channel_id)
-                .content(&format!("ERROR: File not found: `{}`", file_path))
-                .await?;
-            return Ok(());
-        }
-
-        if !path.is_file() {
-            http.create_message(msg.channel_id)
-                .content(&format!("ERROR: Path is not a file: `{}`", file_path))
-                .await?;
-            return Ok(());
-        }
-
-        // Get file metadata
-        let metadata = fs::metadata(path)?;
-        let file_size = metadata.len();
-
-        // Check Discord's file size limit
-        let max_size = Config::get_max_bfilesize() as u64;
-        if file_size > max_size {
-            http.create_message(msg.channel_id)
-                .content(&format!(
-                    "ERROR: File is too large. Discord has a {:.0}MB limit. File size: {:.2} MB",
-                    Config::MAX_FILE_SIZE_MB,
-                    file_size as f64 / (1024.0 * 1024.0)
-                ))
-                .await?;
-            return Ok(());
-        }
-
-        let response_msg = http
-            .create_message(msg.channel_id)
-            .content(&format!("Uploading file `{}`...", file_path))
-            .await?;
-        let response_message = response_msg.model().await?;
-        let _file_content = fs::read(path)?;
-
-        let filename = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("uploaded_file");
-
-        let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
-
-        match http.create_message(msg.channel_id)
-            .content(&format!("SUCCESS: **File ready for upload:**\n**Filename:** `{}`\n**Size:** {:.2} MB\n\n*Note: Actual file upload requires proper attachment handling*", filename, file_size_mb))
-            .await {
+            match tokio::fs::write(&save_filename, &bytes).await {
                 Ok(_) => {
-                    // Delete the "uploading" message
-                    let _ = http.delete_message(msg.channel_id, response_message.id).await;
+                    let size_str = format_size(file_size);
+                    let embed = serenity::CreateEmbed::new()
+                        .title("Attachment Saved")
+                        .field("Original", format!("`{}`", attachment.filename), true)
+                        .field("Saved As", format!("`{}`", save_filename), true)
+                        .field("Size", size_str, true)
+                        .color(0x2ecc71);
+
+                    reply.edit(ctx, poise::CreateReply::default()
+                        .content("")
+                        .embed(embed)).await?;
                 }
                 Err(e) => {
-                    http.update_message(msg.channel_id, response_message.id)
-                        .content(Some(&format!("ERROR: Failed to upload file: {}", e)))
-                        .await?;
+                    reply.edit(ctx, poise::CreateReply::default()
+                        .content(format!("ERROR: Failed to save file: {}", e))).await?;
                 }
             }
-
-        Ok(())
+        }
+        Err(e) => {
+            reply.edit(ctx, poise::CreateReply::default()
+                .content(format!("ERROR: Download failed: {}", e))).await?;
+        }
     }
+
+    Ok(())
+}
+
+async fn handle_file_upload(ctx: PoiseContext<'_>, file_path: &str) -> Result<(), Error> {
+    let path = Path::new(file_path);
+
+    if !path.exists() {
+        ctx.say(format!("ERROR: File not found: `{}`", file_path)).await?;
+        return Ok(());
+    }
+
+    if !path.is_file() {
+        ctx.say(format!("ERROR: Path is not a file: `{}`", file_path)).await?;
+        return Ok(());
+    }
+
+    let metadata = tokio::fs::metadata(path).await?;
+    let file_size = metadata.len();
+    let filename = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+
+    if file_size <= DISCORD_MAX_SIZE {
+        let content = tokio::fs::read(path).await?;
+        let attachment = serenity::CreateAttachment::bytes(content, filename);
+        
+        ctx.send(poise::CreateReply::default()
+            .content(format!("`{}` ({})", filename, format_size(file_size as usize)))
+            .attachment(attachment)).await?;
+        
+        return Ok(());
+    }
+
+    let reply = ctx.say(format!("Uploading `{}` ({}) to file host...", 
+        filename, format_size(file_size as usize))).await?;
+
+    match nullpointer::upload_with_zip(path).await {
+        Ok(result) => {
+            let embed = serenity::CreateEmbed::new()
+                .title("File Uploaded")
+                .field("File", format!("`{}`", filename), true)
+                .field("Size", format_size(file_size as usize), true)
+                .field("Host", &result.host, true)
+                .field("Link", &result.url, false)
+                .footer(serenity::CreateEmbedFooter::new("Expires in 30+ days"))
+                .color(0x2ecc71);
+
+            reply.edit(ctx, poise::CreateReply::default()
+                .content("")
+                .embed(embed)).await?;
+        }
+        Err(e) => {
+            reply.edit(ctx, poise::CreateReply::default()
+                .content(format!("ERROR: Upload failed: {}", e))).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn format_size(bytes: usize) -> String {
+    format_bytes(bytes as u64)
 }

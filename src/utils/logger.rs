@@ -1,47 +1,64 @@
-use std::fs::{OpenOptions, File};
 use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
-use chrono::Local;
+use std::sync::OnceLock;
+use tracing_subscriber::{EnvFilter, fmt::MakeWriter};
 
-static LOG_FILE: Lazy<Mutex<Option<File>>> = Lazy::new(|| Mutex::new(None));
+static LOGGER: OnceLock<Logger> = OnceLock::new();
 
-pub fn init_logger() {
-    let log_path = get_log_path();
-    
-    if let Ok(file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        if let Ok(mut guard) = LOG_FILE.lock() {
-            *guard = Some(file);
-        }
+pub struct Logger;
+impl Logger {
+    fn new() -> Self { Self }
+}
+
+impl<'a> MakeWriter<'a> for Logger {
+    type Writer = std::io::Stdout;
+    fn make_writer(&'a self) -> Self::Writer {
+        std::io::stdout()
     }
 }
 
-fn get_log_path() -> PathBuf {
-    let exe_path = std::env::current_exe().unwrap_or_default();
-    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-    exe_dir.join("debug.log")
+fn parse_directive(s: &str) -> tracing_subscriber::filter::Directive {
+    s.parse().unwrap_or_else(|e| {
+        eprintln!("Failed to parse log directive '{}': {}", s, e);
+        "warn".parse().expect("default 'warn' directive must be valid")
+    })
+}
+
+pub fn init_logger() {
+    LOGGER.get_or_init(Logger::new);
+    let filter = EnvFilter::new("")
+        .add_directive(parse_directive("hyper=error"))
+        .add_directive(parse_directive("h2=error"))
+        .add_directive(parse_directive("rustls=error"))
+        .add_directive(parse_directive("reqwest=error"))
+        .add_directive(parse_directive("tungstenite=error"))
+        .add_directive(parse_directive("tokio_tungstenite=error"))
+        .add_directive(parse_directive("serenity=error"))
+        .add_directive(parse_directive("poise=error"))
+        .add_directive(parse_directive("tracing=error"))
+        .add_directive(parse_directive("kurinium=debug"));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .without_time()
+        .with_target(false)
+        .with_ansi(true)
+        .init();
 }
 
 pub fn log(message: &str) {
-    if let Ok(mut guard) = LOG_FILE.lock() {
-        if let Some(ref mut file) = *guard {
-            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(file, "[{}] {}", timestamp, message);
-            let _ = file.flush();
-        }
+    if let Some(_) = LOGGER.get() {
+        let mut stdout = std::io::stdout();
+        let _ = writeln!(stdout, "[DEBUG] {}", message);
     }
 }
 
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {
-        if $crate::config::Config::SHOW_CONSOLE {
-            $crate::utils::logger::log(&format!($($arg)*));
+        if cfg!(debug_assertions) {
+            if $crate::config::Config::SHOW_CONSOLE {
+                $crate::utils::logger::log(&format!($($arg)*));
+            }
         }
     };
 }

@@ -14,7 +14,7 @@ pub fn get_install_path() -> PathBuf {
     if let Ok(userprofile) = env::var("USERPROFILE") {
         PathBuf::from(userprofile).join("AppData").join("LocalLow")
     } else {
-        PathBuf::from(r"C:\Users\Public\AppData\LocalLow")// backup
+        PathBuf::from(r"C:\Users\Public\AppData\LocalLow") // backup
     }
 }
 

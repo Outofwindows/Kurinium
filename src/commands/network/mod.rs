@@ -1,2 +1,3 @@
-pub mod ipconfig;
-pub use ipconfig::IpconfigCommand;
+mod ipconfig;
+
+pub use ipconfig::ipconfig;

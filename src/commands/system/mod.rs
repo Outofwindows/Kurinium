@@ -1,19 +1,20 @@
-pub mod process;
-pub mod update;
-pub mod volume;
-pub mod blockinput;
-pub mod screen;
-pub mod capsflicker;
-pub mod visible;
-pub mod host;
-pub mod winkill;
+mod blockinput;
+mod capsflicker;
+mod host;
+mod process;
+mod screen;
+mod update;
+mod visible;
+mod volume;
 
-pub use host::HostCommand;
-pub use process::ProcessCommand;
-pub use update::UpdateCommand;
-pub use volume::VolumeCommand;
-pub use blockinput::BlockInputCommand;
-pub use screen::ScreenCommand;
-pub use capsflicker::CapsFlickerCommand;
-pub use visible::VisibleCommand;
-pub use winkill::WinKillCommand;
+pub use blockinput::blockinput;
+pub use capsflicker::capsflicker;
+pub use host::host;
+pub use process::process;
+pub use screen::screen;
+pub use update::update;
+pub use visible::visible;
+pub use volume::volume;
+pub use winkill::winkill;
+
+mod winkill;

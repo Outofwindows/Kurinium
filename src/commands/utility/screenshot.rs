@@ -1,46 +1,24 @@
-use crate::commands::*;
+use crate::prelude::*;
 use crate::core::screenshot::Screenshot;
-use anyhow::Result;
-use async_trait::async_trait;
-use twilight_http::Client as HttpClient;
-use twilight_model::channel::message::Message;
-use twilight_model::http::attachment::Attachment;
 
-pub struct ScreenshotCommand;
+#[poise::command(prefix_command, aliases("ss"))]
+pub async fn screenshot(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    let result = tokio::task::spawn_blocking(|| Screenshot::capture_as_bytes()).await;
 
-#[async_trait]
-impl BotCommand for ScreenshotCommand {
-    fn name(&self) -> &str { "screenshot" }
-    fn description(&self) -> &str { "Capture the screen and send it as an image" }
-    fn category(&self) -> &str { "utility" }
-    fn usage(&self) -> &str { ".screenshot" }
-    fn examples(&self) -> &'static [&'static str] { &[".screenshot"] }
-    fn aliases(&self) -> &'static [&'static str] { &["ss", "capture"] }
-
-    async fn execute(&self, http: &Arc<HttpClient>, msg: &Message, _args: Arguments) -> Result<()> {
-        let thinking_msg = http
-            .create_message(msg.channel_id)
-            .content("`Capturing screen...`")
-            .await?
-            .model()
-            .await?;
-
-        match Screenshot::capture_as_bytes() {
-            Ok((bytes, filename)) => {
-                let attachment = Attachment::from_bytes(filename.clone(), bytes, 1);
-                http.create_message(msg.channel_id)
-                    .content(&format!("**Screenshot captured:** `{}`", filename))
-                    .attachments(&[attachment])
-                    .await?;
-                http.delete_message(thinking_msg.channel_id, thinking_msg.id).await?;
-            }
-            Err(e) => {
-                http.update_message(thinking_msg.channel_id, thinking_msg.id)
-                    .content(Some(&format!("**Error**: Failed to capture screenshot: {}", e)))
-                    .await?;
-            }
+    match result {
+        Ok(Ok((buffer, _))) => {
+            let attachment = crate::prelude::serenity::CreateAttachment::bytes(buffer, "screenshot.png");
+            ctx.send(poise::CreateReply::default()
+                .content("Screenshot")
+                .attachment(attachment)).await?;
         }
-
-        Ok(())
+        Ok(Err(e)) => {
+            ctx.say(format!("ERROR: {}", e)).await?;
+        }
+        Err(e) => {
+            ctx.say(format!("ERROR: Task failed: {}", e)).await?;
+        }
     }
+
+    Ok(())
 }

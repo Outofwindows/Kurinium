@@ -4,4 +4,5 @@ target/
 .vscode
 .git
 nul
+dist/
 presets/*.json

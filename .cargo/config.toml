@@ -1,0 +1,16 @@
+[target.x86_64-pc-windows-msvc]
+# Linker flags to strip PDB path from binary
+rustflags = [
+    "-C", "link-arg=/PDBALTPATH:%_PDB%",     # Use alternative PDB path (placeholder)
+    "-C", "link-arg=/DEBUG:NONE",             # No debug info embedded
+]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "link-arg=-s",                      # Strip symbols (GNU linker)
+]
+
+[build]
+# Use MSVC by default on Windows
+# Uncomment if you want to use GNU toolchain instead
+# target = "x86_64-pc-windows-gnu"
