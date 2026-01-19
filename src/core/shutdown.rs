@@ -79,8 +79,12 @@ impl ShutdownManager {
         log_debug!("[ShutdownManager] Initiating graceful shutdown...");
         self.token.cancel();
 
-        let mut tasks = self.tasks.lock().await;
-        for (name, handle) in tasks.drain(..) {
+        let tasks_to_wait = {
+            let mut tasks = self.tasks.lock().await;
+            tasks.drain(..).collect::<Vec<_>>()
+        };
+
+        for (name, handle) in tasks_to_wait {
             log_debug!("[ShutdownManager] Waiting for task: {}", name);
             match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
                 Ok(Ok(())) => log_debug!("[ShutdownManager] Task '{}' completed", name),

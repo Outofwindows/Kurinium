@@ -1,6 +1,5 @@
-use anyhow::Result;
 use std::sync::Arc;
-use crate::prelude::{serenity, ChannelId, CancellationToken};
+use crate::prelude::{serenity, ChannelId, CancellationToken, KResult};
 use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 use tokio::sync::Mutex;
@@ -43,7 +42,7 @@ impl WifiMonitor {
         self
     }
 
-    pub async fn start_monitoring(&self) -> Result<()> {
+    pub async fn start_monitoring(&self) -> KResult<()> {
         if !self.config.enabled {
             return Ok(());
         }

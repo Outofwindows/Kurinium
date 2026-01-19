@@ -1,6 +1,28 @@
 use crate::prelude::*;
 use std::process::Stdio;
+use std::env;
 use tokio::process::Command;
+use regex::Regex;
+
+fn expand_env_vars(input: &str) -> String {
+    let mut result = input.to_string();
+    
+    if let Ok(re) = Regex::new(r"%([^%]+)%") {
+        result = re.replace_all(&result, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+        }).to_string();
+    }
+    
+    if let Ok(re) = Regex::new(r"\$env:([A-Za-z_][A-Za-z0-9_]*)") {
+        result = re.replace_all(&result, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+        }).to_string();
+    }
+    
+    result
+}
 
 #[poise::command(prefix_command, aliases("cmd", "exec"))]
 pub async fn shell(
@@ -12,7 +34,7 @@ pub async fn shell(
     let command = match command {
         Some(c) => c,
         None => {
-            ctx.say("Usage: `.shell [ps|cmd] <command>`\nDefault: cmd").await?;
+            ctx.say("Usage: `.shell [ps|cmd] <command>`\nDefault: cmd\nSupports: %APPDATA%, %USERPROFILE%, $env:USERPROFILE").await?;
             return Ok(());
         }
     };
@@ -33,16 +55,17 @@ pub async fn shell(
         return Ok(());
     }
 
+    let expanded_command = expand_env_vars(&actual_command);
     let shell_name = if shell_type == "ps" { "PowerShell" } else { "CMD" };
-    let reply = ctx.say(format!("Executing [{}]: `{}`", shell_name, actual_command)).await?;
+    let reply = ctx.say(format!("Executing [{}]: `{}`", shell_name, expanded_command)).await?;
 
     let mut cmd = if shell_type == "ps" {
         let mut c = Command::new("powershell");
-        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &actual_command]);
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &expanded_command]);
         c
     } else {
         let mut c = Command::new("cmd");
-        c.args(["/c", &actual_command]);
+        c.args(["/c", &expanded_command]);
         c
     };
 

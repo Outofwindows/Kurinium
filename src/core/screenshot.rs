@@ -23,7 +23,6 @@ impl Screenshot {
                 return Err(anyhow::anyhow!("Invalid screen dimensions: {}x{}", width, height));
             }
 
-            // Get screen DC (None = entire screen)
             let screen_dc = GetDC(None);
             if screen_dc.is_invalid() {
                 return Err(anyhow::anyhow!("Failed to get screen DC"));
@@ -57,7 +56,7 @@ impl Screenshot {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                     biWidth: width,
-                    biHeight: -height, // Negative for top-down DIB
+                    biHeight: -height,
                     biPlanes: 1,
                     biBitCount: 32,
                     biCompression: BI_RGB.0,
@@ -91,9 +90,8 @@ impl Screenshot {
                 return Err(anyhow::anyhow!("GetDIBits failed"));
             }
 
-            // Convert BGRA to RGBA
             for chunk in buffer.chunks_exact_mut(4) {
-                chunk.swap(0, 2); // Swap B and R
+                chunk.swap(0, 2);
             }
 
             let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
@@ -112,7 +110,6 @@ impl Screenshot {
     }
 }
 
-/// Captures the primary screen and returns PNG bytes
 pub fn capture_screen() -> Result<Vec<u8>> {
     let (buffer, _) = Screenshot::capture_as_bytes()?;
     Ok(buffer)

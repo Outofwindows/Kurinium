@@ -7,6 +7,7 @@ use std::process::Command;
 use crate::config::Config;
 use crate::core::exit_patcher::safe_exit;
 use crate::log_debug;
+use crate::prelude::KResult;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -33,7 +34,7 @@ pub fn check_if_installed(current_exe: &Path) -> bool {
     false
 }
 
-pub fn install_to_path() -> anyhow::Result<()> {
+pub fn install_to_path() -> KResult<()> {
     let current_exe = env::current_exe()?;
     let exe_name = Config::get_exe_name();
     let install_dir = get_install_path();

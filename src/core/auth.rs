@@ -1,4 +1,3 @@
-use anyhow::Result;
 use std::sync::OnceLock;
 use crate::prelude::*;
 use crate::error::KuriniumError;
@@ -13,7 +12,7 @@ impl AuthManager {
         Self { config }
     }
 
-    pub async fn is_authorized_poise(&self, ctx: PoiseContext<'_>) -> Result<bool> {
+    pub async fn is_authorized_poise(&self, ctx: PoiseContext<'_>) -> KResult<bool> {
         if self.config.auth_all {
             return Ok(true);
         }
@@ -80,7 +79,7 @@ impl AuthManager {
 }
 
 static AUTH_MANAGER: OnceLock<AuthManager> = OnceLock::new();
-pub fn get_auth_manager() -> Result<&'static AuthManager, KuriniumError> {
+pub fn get_auth_manager() -> KResult<&'static AuthManager> {
     AUTH_MANAGER.get().ok_or(KuriniumError::AuthNotInitialized)
 }
 pub fn get_auth_manager_unchecked() -> &'static AuthManager {
@@ -88,7 +87,7 @@ pub fn get_auth_manager_unchecked() -> &'static AuthManager {
         .get()
         .expect("FATAL: Auth manager accessed before initialization - this is a bug")
 }
-pub fn init_auth_manager(config: crate::config::AuthConfig) -> Result<(), KuriniumError> {
+pub fn init_auth_manager(config: crate::config::AuthConfig) -> KResult<()> {
     AUTH_MANAGER
         .set(AuthManager::new(config))
         .map_err(|_| KuriniumError::AuthAlreadyInitialized)

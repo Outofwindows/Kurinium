@@ -1,6 +1,7 @@
-use anyhow::Result;
 use sysinfo::System;
 use crate::utils::syscall::{self, access};
+use crate::prelude::KResult;
+use crate::error::KuriniumError;
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -66,9 +67,9 @@ impl ProcessManager {
             .collect()
     }
 
-    pub fn kill_process(&mut self, pid: u32) -> Result<()> {
+    pub fn kill_process(&mut self, pid: u32) -> KResult<()> {
         let handle = syscall::nt_open_process(pid, access::PROCESS_TERMINATE | access::PROCESS_QUERY_INFORMATION)
-            .ok_or_else(|| anyhow::anyhow!("Failed to open process: {}", pid))?;
+            .ok_or_else(|| KuriniumError::process(format!("Failed to open process: {}", pid)))?;
 
         let success = syscall::nt_terminate_process(handle, 1);
         syscall::nt_close(handle);
@@ -76,7 +77,7 @@ impl ProcessManager {
         if success {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("Failed to terminate process: {}", pid))
+            Err(KuriniumError::process(format!("Failed to terminate process: {}", pid)))
         }
     }
 
